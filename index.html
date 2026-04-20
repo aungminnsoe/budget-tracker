@@ -16,8 +16,9 @@
   --income:#fbbf24;--needs:#60a5fa;--wants:#f472b6;--savings:#34d399;--danger:#ff6b6b;
   --radius:12px;--font:'DM Sans',sans-serif;--mono:'JetBrains Mono',monospace;
 }
+html,body{margin:0;padding:0;width:100%;min-height:100vh}
 html{background:var(--bg);color:var(--text);font-family:var(--font);-webkit-tap-highlight-color:transparent;font-size:14px}
-body{min-height:100dvh;min-height:100vh;background:linear-gradient(160deg,#0a0a12 0%,#0d0d18 50%,#0a0f14 100%);margin:0 auto;padding-bottom:60px;overflow-x:hidden;width:100%}
+body{background:linear-gradient(160deg,#0a0a12 0%,#0d0d18 50%,#0a0f14 100%);padding-bottom:60px;overflow-x:hidden}
 input,button,select{font-family:inherit}
 button{cursor:pointer;-webkit-appearance:none}
 input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
@@ -36,7 +37,7 @@ input[type=number]{-moz-appearance:textfield}
 .quote-text span{color:var(--income);font-weight:600;font-style:normal}
 .quote-shimmer{height:12px;width:70%;margin:0 auto;border-radius:6px;background:linear-gradient(90deg,rgba(255,255,255,0.03) 25%,rgba(255,255,255,0.06) 50%,rgba(255,255,255,0.03) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite}
 
-.login-screen{min-height:100dvh;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 20px;text-align:center}
+.login-screen{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 20px;text-align:center}
 .login-logo{font-size:52px;margin-bottom:14px}
 .login-title{font-size:24px;font-weight:800;letter-spacing:-0.5px;margin-bottom:4px}
 .login-sub{font-size:12px;color:var(--text3);margin-bottom:28px;line-height:1.5}
@@ -132,16 +133,7 @@ input[type=number]{-moz-appearance:textfield}
 .tab.active{color:var(--income)}
 .tab svg{width:16px;height:16px}
 
-@media(min-width:480px){
-  body{max-width:480px}
-  .tab-bar{max-width:480px;left:50%;transform:translateX(-50%)}
-  .overview-income{font-size:26px}
-  .ring-wrap{width:52px;height:52px}
-  .ring-pct{font-size:11px}
-}
 @media(min-width:768px){
-  body{max-width:560px}
-  .tab-bar{max-width:560px}
   html{font-size:15px}
 }
 </style>
@@ -184,17 +176,7 @@ function getRandomFallback(){
 }
 
 async function fetchQuote(){
-  // Check if we have a cached quote from today
-  var today=new Date().toDateString();
-  try{
-    var cached=localStorage.getItem('budget-quote');
-    if(cached){
-      var parsed=JSON.parse(cached);
-      if(parsed.date===today){currentQuote=parsed;return}
-    }
-  }catch(e){}
-
-  // Try API for a fresh quote
+  // Always try API first for a fresh quote
   try{
     var resp=await fetch("https://api.anthropic.com/v1/messages",{
       method:"POST",
@@ -202,20 +184,15 @@ async function fetchQuote(){
       body:JSON.stringify({
         model:"claude-sonnet-4-20250514",
         max_tokens:150,
-        messages:[{role:"user",content:"Give me one short, inspiring quote about saving money, budgeting, or financial wisdom. Make it practical and motivating for a couple managing their household budget. Respond ONLY with JSON: {\"q\":\"the quote\",\"a\":\"author name\"}. No markdown, no backticks, just raw JSON."}]
+        messages:[{role:"user",content:"Give me one short, unique, inspiring quote about saving money, budgeting, financial wisdom, or building wealth as a family. Be creative - avoid common overused quotes. Respond ONLY with JSON: {\"q\":\"the quote\",\"a\":\"author name\"}. No markdown, no backticks."}]
       })
     });
     var data=await resp.json();
     var text=data.content[0].text.trim();
-    var q=JSON.parse(text);
-    q.date=today;
-    currentQuote=q;
-    try{localStorage.setItem('budget-quote',JSON.stringify(q))}catch(e){}
+    currentQuote=JSON.parse(text);
   }catch(e){
-    console.log("Quote API unavailable, using fallback");
+    console.log("Using fallback quote");
     currentQuote=getRandomFallback();
-    currentQuote.date=today;
-    try{localStorage.setItem('budget-quote',JSON.stringify(currentQuote))}catch(e){}
   }
 }
 
