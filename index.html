@@ -397,6 +397,25 @@ window.copyAppLink=function(){
   else{prompt("Copy this link:",url)}
 };
 
+// Set persistence once at startup (not inside the click handler)
+auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(function(){});
+// Complete any redirect-based sign-in
+auth.getRedirectResult().catch(function(e){console.log("redirect:",e.code)});
+
+function showAuthErr(msg){
+  var el=document.getElementById('auth-err');
+  if(!el){el=document.createElement('div');el.id='auth-err';el.style.cssText='color:#ff6b6b;font-size:11px;margin-top:14px;max-width:300px;text-align:center;line-height:1.6';var ls=document.querySelector('.login-screen');if(ls)ls.appendChild(el)}
+  el.innerHTML=msg;
+}
+function resetLoginBtn(){
+  var btn=document.querySelector('.login-btn');
+  if(btn)btn.innerHTML='<img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="G" style="width:20px;height:20px">Sign in with Google';
+}
+
+window.signInRedirect=function(){
+  auth.signInWithRedirect(new firebase.auth.GoogleAuthProvider());
+};
+
 window.signIn=function(){
   if(isInAppBrowser()){
     var w=document.getElementById('iab-warn');
@@ -405,15 +424,16 @@ window.signIn=function(){
   }
   var btn=document.querySelector('.login-btn');
   if(btn)btn.innerHTML='<div class="spinner" style="width:18px;height:18px;border-width:2px"></div> Signing in...';
-  auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(function(){}).then(function(){
-    return auth.signInWithPopup(new firebase.auth.GoogleAuthProvider());
-  }).catch(function(err){
-    var el=document.getElementById('auth-err');
-    if(!el){el=document.createElement('div');el.id='auth-err';el.style.cssText='color:#ff6b6b;font-size:10px;margin-top:12px;max-width:280px;text-align:center;line-height:1.5';var ls=document.querySelector('.login-screen');if(ls)ls.appendChild(el)}
-    if(err.code==='auth/popup-blocked'){el.textContent='Popup was blocked. Please allow popups for this site and try again.'}
-    else if(err.code==='auth/popup-closed-by-user'||err.code==='auth/cancelled-popup-request'){el.textContent=''}
-    else{el.textContent=err.message}
-    if(btn)btn.innerHTML='<img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="G" style="width:20px;height:20px">Sign in with Google';
+  // Called directly inside the click handler so the browser keeps the user-gesture
+  auth.signInWithPopup(new firebase.auth.GoogleAuthProvider()).catch(function(err){
+    resetLoginBtn();
+    if(err.code==='auth/popup-closed-by-user'||err.code==='auth/cancelled-popup-request'){
+      showAuthErr('');
+    } else if(err.code==='auth/popup-blocked'||err.code==='auth/operation-not-supported-in-this-environment'||err.code==='auth/web-storage-unsupported'){
+      showAuthErr('Popup was blocked by your browser.<br><button onclick="signInRedirect()" style="margin-top:10px;background:rgba(251,191,36,0.15);border:1px solid rgba(251,191,36,0.35);border-radius:9px;padding:10px 18px;color:#fbbf24;font-size:12px;font-weight:700">Sign in without popup →</button><div style="margin-top:10px;color:rgba(255,255,255,0.35);font-size:10px">Or allow popups for this site in your browser settings.</div>');
+    } else {
+      showAuthErr(err.message);
+    }
   });
 };
 window.signOut=function(){if(unsub)unsub();auth.signOut()};
