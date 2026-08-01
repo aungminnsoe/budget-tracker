@@ -143,7 +143,9 @@ input[type=number]{-moz-appearance:textfield}
 .mini-box .l{font-size:8px;color:var(--text3);margin-top:2px}
 .inv-head{display:flex;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.08);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px}
 .inv-row{display:flex;align-items:center;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.04);font-size:11px}
-.inv-c1{flex:1.5;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text2)}
+.inv-c1{flex:1.5;min-width:0;overflow:hidden;color:var(--text2)}
+.inv-c1>div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.inv-sub{font-size:8px;color:var(--text3);margin-top:1px}
 .inv-c2,.inv-c3,.inv-c4{flex:1;text-align:right;font-family:var(--mono);font-weight:600}
 .inv-acts{width:44px;display:flex;justify-content:flex-end;flex-shrink:0}
 .inv-total{display:flex;padding:10px 0 4px;border-top:2px solid rgba(255,255,255,0.1);margin-top:4px;font-size:12px;font-weight:800}
@@ -291,8 +293,40 @@ var state={user:null,year:new Date().getFullYear(),month:new Date().getMonth(),d
 var unsub=null;
 function getMonth(){return state.data[mkey(state.year,state.month)]||emptyMonth()}
 function totals(sec){return(getMonth()[sec]||[]).reduce(function(s,i){return s+i.amount},0)}
-function getInv(){return state.investments||clone(DEFAULT_INV)}
+function getInv(){
+  var list=state.investments||clone(DEFAULT_INV);
+  // migrate old {inv:} rows to the new {opening:, link:} shape
+  return list.map(function(r){
+    return {
+      id:r.id,
+      name:r.name,
+      opening:(r.opening!==undefined&&r.opening!==null)?r.opening:(r.inv||0),
+      pl:r.pl||0,
+      link:r.link||""
+    };
+  });
+}
 function getFixed(){return state.fixed||clone(DEFAULT_FIXED)}
+
+// Every unique savings row label used across all months
+function allSavingsLabels(){
+  var set={};
+  Object.keys(state.data).forEach(function(k){
+    var m=state.data[k];if(!m||!m.savings)return;
+    m.savings.forEach(function(i){if(i.label)set[i.label]=true});
+  });
+  return Object.keys(set).sort();
+}
+// Total contributed to a given savings label across every month
+function contribFor(label){
+  if(!label)return 0;
+  var t=0;
+  Object.keys(state.data).forEach(function(k){
+    var m=state.data[k];if(!m||!m.savings)return;
+    m.savings.forEach(function(i){if(i.label===label)t+=(i.amount||0)});
+  });
+  return t;
+}
 
 function startSync(){
   if(unsub)unsub();
@@ -460,9 +494,10 @@ function renderWealth(){
   var h='<div class="header"><div class="header-label">Wealth</div><div class="month-nav"><h1 style="font-size:20px">Savings &amp; Assets</h1></div></div><div class="content">';
 
   // ── Cumulative savings ──
-  h+='<div class="big-card fade-up"><div class="big-label">Cumulative Savings</div><div class="big-val" style="color:var(--savings)">'+cur(cumTotal)+'</div>';
+  h+='<div class="big-card fade-up"><div class="big-label">Total Contributed</div><div class="big-val" style="color:var(--savings)">'+cur(cumTotal)+'</div>';
   h+='<div class="big-sub">'+(range.length?keyLabel(range[0])+' → '+keyLabel(range[range.length-1])+' &bull; '+range.length+' month'+(range.length>1?'s':''):'No data yet')+'</div>';
-  h+='<div class="mini-grid"><div class="mini-box"><div class="v" style="color:var(--savings)">'+cur(avg)+'</div><div class="l">Avg / month</div></div><div class="mini-box"><div class="v" style="color:var(--needs)">'+range.length+'</div><div class="l">Months counted</div></div></div></div>';
+  h+='<div class="mini-grid"><div class="mini-box"><div class="v" style="color:var(--savings)">'+cur(avg)+'</div><div class="l">Avg / month</div></div><div class="mini-box"><div class="v" style="color:var(--needs)">'+range.length+'</div><div class="l">Months counted</div></div></div>';
+  h+='<div class="big-sub" style="margin-top:8px;color:var(--text4)">This is your savings rate, not a separate pot — the money already sits in your holdings below.</div></div>';
 
   // Start month selector
   h+='<div class="dash-card fade-up d1"><div class="sel-row"><label>Count from</label><select class="msel" onchange="setCumStart(this.value)">';
@@ -484,28 +519,55 @@ function renderWealth(){
   }
   h+='</div>';
 
-  // ── Investments ──
+  // ── Holdings (auto-linked to monthly savings) ──
   var inv=getInv();
-  var sumInv=0,sumPL=0;
-  inv.forEach(function(r){sumInv+=(r.inv||0);sumPL+=(r.pl||0)});
+  var sumOpen=0,sumAdd=0,sumPL=0;
+  inv.forEach(function(r){
+    var add=contribFor(r.link);
+    sumOpen+=(r.opening||0);sumAdd+=add;sumPL+=(r.pl||0);
+  });
+  var sumInv=sumOpen+sumAdd;
   var sumTot=sumInv+sumPL;
+  var labels=allSavingsLabels();
+  var linked={};inv.forEach(function(r){if(r.link)linked[r.link]=true});
+  var orphan=labels.filter(function(l){return !linked[l]});
 
   h+='<div class="big-card fade-up d2" style="background:linear-gradient(135deg,rgba(251,191,36,0.08),rgba(96,165,250,0.05))"><div class="big-label">Portfolio Value</div><div class="big-val" style="color:var(--income)">'+cur(sumTot)+'</div>';
-  h+='<div class="mini-grid"><div class="mini-box"><div class="v" style="color:var(--needs)">'+cur(sumInv)+'</div><div class="l">Invested</div></div><div class="mini-box"><div class="v" style="color:'+(sumPL>=0?'var(--savings)':'var(--danger)')+'">'+cur(sumPL)+'</div><div class="l">Unrealised P/L</div></div></div></div>';
+  h+='<div class="mini-grid"><div class="mini-box"><div class="v" style="color:var(--needs)">'+cur(sumInv)+'</div><div class="l">Invested</div></div><div class="mini-box"><div class="v" style="color:'+(sumPL>=0?'var(--savings)':'var(--danger)')+'">'+cur(sumPL)+'</div><div class="l">Unrealised P/L</div></div></div>';
+  if(sumAdd>0)h+='<div class="big-sub" style="margin-top:8px">🔗 '+cur(sumAdd)+' of that was added automatically from your monthly savings</div>';
+  h+='</div>';
 
-  h+='<div class="dash-card fade-up d3"><div class="dash-title" style="color:var(--income)">💼 Investment Holdings</div>';
+  h+='<div class="dash-card fade-up d3"><div class="dash-title" style="color:var(--income)">💼 Holdings</div>';
+
+  if(orphan.length){
+    h+='<div style="background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.2);border-radius:9px;padding:10px;margin-bottom:10px">';
+    h+='<div style="font-size:10px;color:#fbbf24;font-weight:700;margin-bottom:4px">⚠️ Not linked yet</div>';
+    h+='<div style="font-size:10px;color:var(--text3);line-height:1.6">These monthly savings rows aren\'t feeding any holding: <b style="color:var(--text2)">'+orphan.map(esc).join(', ')+'</b></div>';
+    h+='<button onclick="createFromLabels()" style="margin-top:9px;width:100%;background:rgba(251,191,36,0.15);border:1px solid rgba(251,191,36,0.3);border-radius:8px;padding:9px;color:#fbbf24;font-size:10px;font-weight:700">＋ Create holdings for these</button></div>';
+  }
+
   h+='<div class="inv-head"><div class="inv-c1">Asset</div><div class="inv-c2">Invested</div><div class="inv-c3">P/L</div><div class="inv-c4">Total</div><div class="inv-acts"></div></div>';
 
   inv.forEach(function(r){
+    var add=contribFor(r.link);
+    var invested=(r.opening||0)+add;
     if(state.invEditing===r.id){
-      h+='<div class="inv-edit"><input class="n" id="iv-name" value="'+esc(r.name)+'" placeholder="Asset name">'+
-         '<input class="a" id="iv-inv" type="text" inputmode="decimal" value="'+(r.inv||0)+'" placeholder="Invested">'+
-         '<button class="sign-btn" onclick="flipSign(\'iv-pl\')" title="Switch between profit and loss">±</button>'+
-         '<input class="a" id="iv-pl" type="text" inputmode="decimal" value="'+(r.pl||0)+'" placeholder="P/L">'+
-         '<button class="edit-save" style="background:var(--income)" onclick="saveInvRow(\''+r.id+'\')">OK</button></div>';
+      h+='<div class="inv-edit"><input class="n" id="iv-name" value="'+esc(r.name)+'" placeholder="Asset name">';
+      h+='<select class="msel" id="iv-link" style="flex:1 1 100%"><option value="">🔗 Not linked to a monthly row</option>';
+      labels.forEach(function(l){h+='<option value="'+esc(l)+'"'+(l===r.link?' selected':'')+'>🔗 '+esc(l)+' &nbsp;('+cur(contribFor(l))+' so far)</option>'});
+      h+='</select>';
+      h+='<input class="a" id="iv-open" type="text" inputmode="decimal" value="'+(r.opening||0)+'" placeholder="Starting amount">';
+      h+='<button class="sign-btn" onclick="flipSign(\'iv-pl\')" title="Switch between profit and loss">±</button>';
+      h+='<input class="a" id="iv-pl" type="text" inputmode="decimal" value="'+(r.pl||0)+'" placeholder="P/L">';
+      h+='<button class="edit-save" style="background:var(--income)" onclick="saveInvRow(\''+r.id+'\')">OK</button>';
+      h+='<div style="flex:1 1 100%;font-size:9px;color:var(--text3);margin-top:2px;line-height:1.6">Starting amount = what you already held before tracking here. Monthly contributions get added on top automatically.</div></div>';
     } else {
-      var tot=(r.inv||0)+(r.pl||0);
-      h+='<div class="inv-row"><div class="inv-c1">'+esc(r.name)+'</div><div class="inv-c2" style="color:var(--text2)">'+cur(r.inv||0)+'</div><div class="inv-c3" style="color:'+((r.pl||0)>=0?'var(--savings)':'var(--danger)')+'">'+cur(r.pl||0)+'</div><div class="inv-c4" style="color:var(--income)">'+cur(tot)+'</div><div class="inv-acts"><button class="item-btn" onclick="editInvRow(\''+r.id+'\')">'+eico()+'</button><button class="item-btn" onclick="delInvRow(\''+r.id+'\')">'+dico()+'</button></div></div>';
+      var tot=invested+(r.pl||0);
+      h+='<div class="inv-row"><div class="inv-c1"><div>'+esc(r.name)+'</div>'+(add>0?'<div class="inv-sub">🔗 '+esc(r.link)+' &nbsp;+'+cur(add)+'</div>':'')+'</div>';
+      h+='<div class="inv-c2" style="color:var(--text2)">'+cur(invested)+'</div>';
+      h+='<div class="inv-c3" style="color:'+((r.pl||0)>=0?'var(--savings)':'var(--danger)')+'">'+cur(r.pl||0)+'</div>';
+      h+='<div class="inv-c4" style="color:var(--income)">'+cur(tot)+'</div>';
+      h+='<div class="inv-acts"><button class="item-btn" onclick="editInvRow(\''+r.id+'\')">'+eico()+'</button><button class="item-btn" onclick="delInvRow(\''+r.id+'\')">'+dico()+'</button></div></div>';
     }
   });
 
@@ -544,9 +606,9 @@ function renderWealth(){
   }
   h+='<button class="add-btn" style="color:#a78bfaaa;border-color:#a78bfa30" onclick="addFixRow()">'+pico()+' Add property</button></div>';
 
-  // ── Combined net worth ──
-  var netWorth=cumTotal+sumTot+fVal;
-  h+='<div class="big-card fade-up d4" style="background:linear-gradient(135deg,rgba(96,165,250,0.09),rgba(244,114,182,0.05))"><div class="big-label">Total Net Worth</div><div class="big-val" style="color:var(--needs)">'+cur(netWorth)+'</div><div class="big-sub">Savings '+cur(cumTotal)+' &nbsp;+&nbsp; Portfolio '+cur(sumTot)+' &nbsp;+&nbsp; Property '+cur(fVal)+'</div></div>';
+  // ── Net worth (no double counting: contributions already live inside holdings) ──
+  var netWorth=sumTot+fVal;
+  h+='<div class="big-card fade-up d4" style="background:linear-gradient(135deg,rgba(96,165,250,0.09),rgba(244,114,182,0.05))"><div class="big-label">Total Net Worth</div><div class="big-val" style="color:var(--needs)">'+cur(netWorth)+'</div><div class="big-sub">Holdings '+cur(sumTot)+' &nbsp;+&nbsp; Property '+cur(fVal)+'</div></div>';
 
   h+='<div class="export-row"><button class="export-btn" onclick="exportWealthCSV()">📥 Export Wealth CSV</button></div>';
   if(state.lastUpdatedBy){var t2=state.lastUpdatedAt?state.lastUpdatedAt.toLocaleString():"";h+='<div class="updated-by">Last updated by '+esc(state.lastUpdatedBy)+(t2?' &bull; '+t2:'')+'</div>'}
@@ -579,8 +641,10 @@ window.editInvRow=function(id){state.invEditing=id;state.fixEditing=null;render(
 window.saveInvRow=function(id){
   var list=clone(getInv());
   var name=document.getElementById('iv-name').value.trim();
-  var iv=num('iv-inv'),pl=num('iv-pl');
-  list=list.map(function(r){return r.id===id?{id:id,name:name||r.name,inv:iv,pl:pl}:r});
+  var linkEl=document.getElementById('iv-link');
+  var link=linkEl?linkEl.value:"";
+  var opening=num('iv-open'),pl=num('iv-pl');
+  list=list.map(function(r){return r.id===id?{id:id,name:name||r.name,opening:opening,pl:pl,link:link}:r});
   state.invEditing=null;saveInv(list);
 };
 window.delInvRow=function(id){
@@ -589,8 +653,18 @@ window.delInvRow=function(id){
 };
 window.addInvRow=function(){
   var list=clone(getInv()),nid=uid();
-  list.push({id:nid,name:"New Asset",inv:0,pl:0});
+  list.push({id:nid,name:"New Asset",opening:0,pl:0,link:""});
   state.invEditing=nid;state.fixEditing=null;saveInv(list);
+};
+// Create a holding for every monthly savings row that isn't linked yet
+window.createFromLabels=function(){
+  var list=clone(getInv());
+  var linked={};list.forEach(function(r){if(r.link)linked[r.link]=true});
+  var added=0;
+  allSavingsLabels().forEach(function(l){
+    if(!linked[l]){list.push({id:uid(),name:l,opening:0,pl:0,link:l});added++}
+  });
+  if(added)saveInv(list);
 };
 
 // Fixed assets (land / property)
@@ -613,13 +687,18 @@ window.addFixRow=function(){
 };
 
 window.exportWealthCSV=function(){
-  var range=cumRange(),rows=[["Wealth Report"],["Generated",new Date().toLocaleString()],[""],["CUMULATIVE SAVINGS"],["Month","Savings"]];
+  var range=cumRange(),rows=[["Wealth Report"],["Generated",new Date().toLocaleString()],[""],["MONTHLY CONTRIBUTIONS (savings rate)"],["Month","Contributed"]];
   var cum=0;range.forEach(function(k){var v=savingsOf(k);cum+=v;rows.push([keyLabel(k),v.toFixed(2)])});
-  rows.push(["TOTAL",cum.toFixed(2)]);rows.push([""]);
-  rows.push(["INVESTMENT PORTFOLIO"]);rows.push(["Asset","Invested","Unrealised P/L","Total"]);
-  var si=0,sp=0;
-  getInv().forEach(function(r){si+=(r.inv||0);sp+=(r.pl||0);rows.push([r.name,(r.inv||0).toFixed(2),(r.pl||0).toFixed(2),((r.inv||0)+(r.pl||0)).toFixed(2)])});
-  rows.push(["TOTAL",si.toFixed(2),sp.toFixed(2),(si+sp).toFixed(2)]);
+  rows.push(["TOTAL CONTRIBUTED",cum.toFixed(2)]);rows.push([""]);
+  rows.push(["HOLDINGS"]);rows.push(["Asset","Linked monthly row","Starting amount","Auto-added","Invested","Unrealised P/L","Total"]);
+  var so=0,sa=0,sp=0;
+  getInv().forEach(function(r){
+    var add=contribFor(r.link),invd=(r.opening||0)+add;
+    so+=(r.opening||0);sa+=add;sp+=(r.pl||0);
+    rows.push([r.name,r.link||"—",(r.opening||0).toFixed(2),add.toFixed(2),invd.toFixed(2),(r.pl||0).toFixed(2),(invd+(r.pl||0)).toFixed(2)]);
+  });
+  var si=so+sa;
+  rows.push(["TOTAL","",so.toFixed(2),sa.toFixed(2),si.toFixed(2),sp.toFixed(2),(si+sp).toFixed(2)]);
   rows.push([""]);
   rows.push(["FIXED ASSETS (LAND / PROPERTY)"]);rows.push(["Asset","Cost Paid","Current Value","Change"]);
   var fc=0,fv=0;
@@ -627,10 +706,9 @@ window.exportWealthCSV=function(){
   rows.push(["TOTAL",fc.toFixed(2),fv.toFixed(2),(fv-fc).toFixed(2)]);
   rows.push([""]);
   rows.push(["NET WORTH"]);
-  rows.push(["Cumulative Savings",cum.toFixed(2)]);
-  rows.push(["Portfolio Value",(si+sp).toFixed(2)]);
+  rows.push(["Holdings Value",(si+sp).toFixed(2)]);
   rows.push(["Property Value",fv.toFixed(2)]);
-  rows.push(["TOTAL NET WORTH",(cum+si+sp+fv).toFixed(2)]);
+  rows.push(["TOTAL NET WORTH",(si+sp+fv).toFixed(2)]);
   var csv=rows.map(function(r){return r.map(function(c){return'"'+String(c).replace(/"/g,'""')+'"'}).join(",")}).join("\n");
   var a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download="Wealth_Report.csv";a.click();
 };
