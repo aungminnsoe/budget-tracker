@@ -147,6 +147,8 @@ input[type=number]{-moz-appearance:textfield}
 .inv-c2,.inv-c3,.inv-c4{flex:1;text-align:right;font-family:var(--mono);font-weight:600}
 .inv-acts{width:44px;display:flex;justify-content:flex-end;flex-shrink:0}
 .inv-total{display:flex;padding:10px 0 4px;border-top:2px solid rgba(255,255,255,0.1);margin-top:4px;font-size:12px;font-weight:800}
+.sign-btn{flex:0 0 auto;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.16);border-radius:7px;padding:7px 11px;color:#fff;font-size:14px;font-weight:800;line-height:1}
+.sign-btn:active{background:rgba(251,191,36,0.25)}
 .inv-edit{display:flex;flex-wrap:wrap;gap:5px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.04)}
 .inv-edit input{background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:7px;padding:7px;color:#fff;font-size:11px;outline:none;min-width:0}
 .inv-edit .n{flex:1 1 100%}
@@ -283,11 +285,14 @@ var DEFAULT_INV=[
   {id:"moo_ams",name:"MOOMOO_stock",inv:0,pl:0}
 ];
 
-var state={user:null,year:new Date().getFullYear(),month:new Date().getMonth(),data:{},investments:null,cumStart:null,view:"dashboard",editing:null,invEditing:null,syncing:false,lastUpdatedBy:null,lastUpdatedAt:null};
+var DEFAULT_FIXED=[];
+
+var state={user:null,year:new Date().getFullYear(),month:new Date().getMonth(),data:{},investments:null,fixed:null,cumStart:null,view:"dashboard",editing:null,invEditing:null,fixEditing:null,syncing:false,lastUpdatedBy:null,lastUpdatedAt:null};
 var unsub=null;
 function getMonth(){return state.data[mkey(state.year,state.month)]||emptyMonth()}
 function totals(sec){return(getMonth()[sec]||[]).reduce(function(s,i){return s+i.amount},0)}
 function getInv(){return state.investments||clone(DEFAULT_INV)}
+function getFixed(){return state.fixed||clone(DEFAULT_FIXED)}
 
 function startSync(){
   if(unsub)unsub();
@@ -296,6 +301,7 @@ function startSync(){
       var d=doc.data();
       state.data=d.months||{};
       state.investments=d.investments||null;
+      state.fixed=d.fixedAssets||null;
       state.cumStart=d.cumStart||null;
       state.lastUpdatedBy=d.updatedByName||null;
       state.lastUpdatedAt=d.updatedAt?d.updatedAt.toDate():null;
@@ -311,6 +317,7 @@ function pushAll(){
     db.collection("budgets").doc(DOC_ID).set({
       months:state.data,
       investments:state.investments||clone(DEFAULT_INV),
+      fixedAssets:state.fixed||[],
       cumStart:state.cumStart||null,
       updatedBy:state.user.uid,
       updatedByName:state.user.displayName||state.user.email,
@@ -320,6 +327,7 @@ function pushAll(){
 }
 function save(md){state.data[mkey(state.year,state.month)]=md;pushAll()}
 function saveInv(list){state.investments=list;pushAll()}
+function saveFixed(list){state.fixed=list;pushAll()}
 
 // ── Cumulative savings helpers ──
 function allMonthKeys(){return Object.keys(state.data).sort()}
@@ -490,7 +498,11 @@ function renderWealth(){
 
   inv.forEach(function(r){
     if(state.invEditing===r.id){
-      h+='<div class="inv-edit"><input class="n" id="iv-name" value="'+esc(r.name)+'" placeholder="Asset name"><input class="a" id="iv-inv" type="number" inputmode="decimal" step="0.01" value="'+(r.inv||0)+'" placeholder="Invested"><input class="a" id="iv-pl" type="number" inputmode="decimal" step="0.01" value="'+(r.pl||0)+'" placeholder="P/L"><button class="edit-save" style="background:var(--income)" onclick="saveInvRow(\''+r.id+'\')">OK</button></div>';
+      h+='<div class="inv-edit"><input class="n" id="iv-name" value="'+esc(r.name)+'" placeholder="Asset name">'+
+         '<input class="a" id="iv-inv" type="text" inputmode="decimal" value="'+(r.inv||0)+'" placeholder="Invested">'+
+         '<button class="sign-btn" onclick="flipSign(\'iv-pl\')" title="Switch between profit and loss">±</button>'+
+         '<input class="a" id="iv-pl" type="text" inputmode="decimal" value="'+(r.pl||0)+'" placeholder="P/L">'+
+         '<button class="edit-save" style="background:var(--income)" onclick="saveInvRow(\''+r.id+'\')">OK</button></div>';
     } else {
       var tot=(r.inv||0)+(r.pl||0);
       h+='<div class="inv-row"><div class="inv-c1">'+esc(r.name)+'</div><div class="inv-c2" style="color:var(--text2)">'+cur(r.inv||0)+'</div><div class="inv-c3" style="color:'+((r.pl||0)>=0?'var(--savings)':'var(--danger)')+'">'+cur(r.pl||0)+'</div><div class="inv-c4" style="color:var(--income)">'+cur(tot)+'</div><div class="inv-acts"><button class="item-btn" onclick="editInvRow(\''+r.id+'\')">'+eico()+'</button><button class="item-btn" onclick="delInvRow(\''+r.id+'\')">'+dico()+'</button></div></div>';
@@ -500,8 +512,41 @@ function renderWealth(){
   h+='<div class="inv-total"><div class="inv-c1">TOTAL</div><div class="inv-c2" style="color:var(--needs)">'+cur(sumInv)+'</div><div class="inv-c3" style="color:'+(sumPL>=0?'var(--savings)':'var(--danger)')+'">'+cur(sumPL)+'</div><div class="inv-c4" style="color:var(--income)">'+cur(sumTot)+'</div><div class="inv-acts"></div></div>';
   h+='<button class="add-btn" style="color:#fbbf24aa;border-color:#fbbf2430" onclick="addInvRow()">'+pico()+' Add asset</button></div>';
 
+  // ── Fixed assets (land / property) ──
+  var fx=getFixed();
+  var fCost=0,fVal=0;
+  fx.forEach(function(r){fCost+=(r.cost||0);fVal+=(r.val||0)});
+  var fChange=fVal-fCost;
+
+  h+='<div class="big-card fade-up d3" style="background:linear-gradient(135deg,rgba(167,139,250,0.09),rgba(96,165,250,0.05))"><div class="big-label">Fixed Assets Value</div><div class="big-val" style="color:#a78bfa">'+cur(fVal)+'</div>';
+  h+='<div class="mini-grid"><div class="mini-box"><div class="v" style="color:var(--needs)">'+cur(fCost)+'</div><div class="l">Total spent</div></div><div class="mini-box"><div class="v" style="color:'+(fChange>=0?'var(--savings)':'var(--danger)')+'">'+cur(fChange)+'</div><div class="l">Gain / Loss</div></div></div></div>';
+
+  h+='<div class="dash-card fade-up d3"><div class="dash-title" style="color:#a78bfa">🏡 Land &amp; Property</div>';
+  h+='<div class="inv-head"><div class="inv-c1">Asset</div><div class="inv-c2">Cost</div><div class="inv-c3">Value</div><div class="inv-c4">Change</div><div class="inv-acts"></div></div>';
+
+  if(!fx.length){h+='<div class="empty-msg">No fixed assets yet — tap "Add property" below</div>'}
+
+  fx.forEach(function(r){
+    if(state.fixEditing===r.id){
+      h+='<div class="inv-edit"><input class="n" id="fx-name" value="'+esc(r.name)+'" placeholder="e.g. Apartment / Land plot">'+
+         '<input class="a" id="fx-cost" type="text" inputmode="decimal" value="'+(r.cost||0)+'" placeholder="Cost paid">'+
+         '<input class="a" id="fx-val" type="text" inputmode="decimal" value="'+(r.val||0)+'" placeholder="Current value">'+
+         '<button class="edit-save" style="background:#a78bfa" onclick="saveFixRow(\''+r.id+'\')">OK</button>'+
+         '<div style="flex:1 1 100%;font-size:9px;color:var(--text3);margin-top:2px">Cost = what you paid &bull; Value = what it\'s worth now</div></div>';
+    } else {
+      var ch=(r.val||0)-(r.cost||0);
+      h+='<div class="inv-row"><div class="inv-c1">'+esc(r.name)+'</div><div class="inv-c2" style="color:var(--text2)">'+cur(r.cost||0)+'</div><div class="inv-c3" style="color:#a78bfa">'+cur(r.val||0)+'</div><div class="inv-c4" style="color:'+(ch>=0?'var(--savings)':'var(--danger)')+'">'+cur(ch)+'</div><div class="inv-acts"><button class="item-btn" onclick="editFixRow(\''+r.id+'\')">'+eico()+'</button><button class="item-btn" onclick="delFixRow(\''+r.id+'\')">'+dico()+'</button></div></div>';
+    }
+  });
+
+  if(fx.length){
+    h+='<div class="inv-total"><div class="inv-c1">TOTAL</div><div class="inv-c2" style="color:var(--needs)">'+cur(fCost)+'</div><div class="inv-c3" style="color:#a78bfa">'+cur(fVal)+'</div><div class="inv-c4" style="color:'+(fChange>=0?'var(--savings)':'var(--danger)')+'">'+cur(fChange)+'</div><div class="inv-acts"></div></div>';
+  }
+  h+='<button class="add-btn" style="color:#a78bfaaa;border-color:#a78bfa30" onclick="addFixRow()">'+pico()+' Add property</button></div>';
+
   // ── Combined net worth ──
-  h+='<div class="big-card fade-up d4" style="background:linear-gradient(135deg,rgba(96,165,250,0.09),rgba(244,114,182,0.05))"><div class="big-label">Cumulative Savings + Portfolio</div><div class="big-val" style="color:var(--needs)">'+cur(cumTotal+sumTot)+'</div><div class="big-sub">Combined total</div></div>';
+  var netWorth=cumTotal+sumTot+fVal;
+  h+='<div class="big-card fade-up d4" style="background:linear-gradient(135deg,rgba(96,165,250,0.09),rgba(244,114,182,0.05))"><div class="big-label">Total Net Worth</div><div class="big-val" style="color:var(--needs)">'+cur(netWorth)+'</div><div class="big-sub">Savings '+cur(cumTotal)+' &nbsp;+&nbsp; Portfolio '+cur(sumTot)+' &nbsp;+&nbsp; Property '+cur(fVal)+'</div></div>';
 
   h+='<div class="export-row"><button class="export-btn" onclick="exportWealthCSV()">📥 Export Wealth CSV</button></div>';
   if(state.lastUpdatedBy){var t2=state.lastUpdatedAt?state.lastUpdatedAt.toLocaleString():"";h+='<div class="updated-by">Last updated by '+esc(state.lastUpdatedBy)+(t2?' &bull; '+t2:'')+'</div>'}
@@ -519,12 +564,22 @@ function tabBar(){
 
 // Wealth actions
 window.setCumStart=function(v){state.cumStart=v;pushAll()};
-window.editInvRow=function(id){state.invEditing=id;render();setTimeout(function(){var e=document.getElementById('iv-name');if(e)e.focus()},50)};
+// ± toggle for loss values (iOS number pad has no minus key)
+window.flipSign=function(id){
+  var e=document.getElementById(id);if(!e)return;
+  var v=(e.value||"").trim();
+  if(v.charAt(0)==='-'){e.value=v.slice(1)}
+  else if(v===''||v==='0'){e.value='-'}
+  else{e.value='-'+v}
+  e.focus();
+};
+function num(id){var e=document.getElementById(id);if(!e)return 0;var v=parseFloat(String(e.value).replace(/[^0-9.\-]/g,''));return isNaN(v)?0:v}
+
+window.editInvRow=function(id){state.invEditing=id;state.fixEditing=null;render();setTimeout(function(){var e=document.getElementById('iv-name');if(e)e.focus()},50)};
 window.saveInvRow=function(id){
   var list=clone(getInv());
   var name=document.getElementById('iv-name').value.trim();
-  var iv=parseFloat(document.getElementById('iv-inv').value)||0;
-  var pl=parseFloat(document.getElementById('iv-pl').value)||0;
+  var iv=num('iv-inv'),pl=num('iv-pl');
   list=list.map(function(r){return r.id===id?{id:id,name:name||r.name,inv:iv,pl:pl}:r});
   state.invEditing=null;saveInv(list);
 };
@@ -535,8 +590,28 @@ window.delInvRow=function(id){
 window.addInvRow=function(){
   var list=clone(getInv()),nid=uid();
   list.push({id:nid,name:"New Asset",inv:0,pl:0});
-  state.invEditing=nid;saveInv(list);
+  state.invEditing=nid;state.fixEditing=null;saveInv(list);
 };
+
+// Fixed assets (land / property)
+window.editFixRow=function(id){state.fixEditing=id;state.invEditing=null;render();setTimeout(function(){var e=document.getElementById('fx-name');if(e)e.focus()},50)};
+window.saveFixRow=function(id){
+  var list=clone(getFixed());
+  var name=document.getElementById('fx-name').value.trim();
+  var cost=num('fx-cost'),val=num('fx-val');
+  list=list.map(function(r){return r.id===id?{id:id,name:name||r.name,cost:cost,val:val}:r});
+  state.fixEditing=null;saveFixed(list);
+};
+window.delFixRow=function(id){
+  if(!confirm("Delete this property?"))return;
+  saveFixed(clone(getFixed()).filter(function(r){return r.id!==id}));
+};
+window.addFixRow=function(){
+  var list=clone(getFixed()),nid=uid();
+  list.push({id:nid,name:"New Property",cost:0,val:0});
+  state.fixEditing=nid;state.invEditing=null;saveFixed(list);
+};
+
 window.exportWealthCSV=function(){
   var range=cumRange(),rows=[["Wealth Report"],["Generated",new Date().toLocaleString()],[""],["CUMULATIVE SAVINGS"],["Month","Savings"]];
   var cum=0;range.forEach(function(k){var v=savingsOf(k);cum+=v;rows.push([keyLabel(k),v.toFixed(2)])});
@@ -545,7 +620,17 @@ window.exportWealthCSV=function(){
   var si=0,sp=0;
   getInv().forEach(function(r){si+=(r.inv||0);sp+=(r.pl||0);rows.push([r.name,(r.inv||0).toFixed(2),(r.pl||0).toFixed(2),((r.inv||0)+(r.pl||0)).toFixed(2)])});
   rows.push(["TOTAL",si.toFixed(2),sp.toFixed(2),(si+sp).toFixed(2)]);
-  rows.push([""]);rows.push(["COMBINED",(cum+si+sp).toFixed(2)]);
+  rows.push([""]);
+  rows.push(["FIXED ASSETS (LAND / PROPERTY)"]);rows.push(["Asset","Cost Paid","Current Value","Change"]);
+  var fc=0,fv=0;
+  getFixed().forEach(function(r){fc+=(r.cost||0);fv+=(r.val||0);rows.push([r.name,(r.cost||0).toFixed(2),(r.val||0).toFixed(2),((r.val||0)-(r.cost||0)).toFixed(2)])});
+  rows.push(["TOTAL",fc.toFixed(2),fv.toFixed(2),(fv-fc).toFixed(2)]);
+  rows.push([""]);
+  rows.push(["NET WORTH"]);
+  rows.push(["Cumulative Savings",cum.toFixed(2)]);
+  rows.push(["Portfolio Value",(si+sp).toFixed(2)]);
+  rows.push(["Property Value",fv.toFixed(2)]);
+  rows.push(["TOTAL NET WORTH",(cum+si+sp+fv).toFixed(2)]);
   var csv=rows.map(function(r){return r.map(function(c){return'"'+String(c).replace(/"/g,'""')+'"'}).join(",")}).join("\n");
   var a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download="Wealth_Report.csv";a.click();
 };
