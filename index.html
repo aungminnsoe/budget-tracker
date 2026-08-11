@@ -289,7 +289,7 @@ var DEFAULT_INV=[
 
 var DEFAULT_FIXED=[];
 
-var state={user:null,year:new Date().getFullYear(),month:new Date().getMonth(),data:{},investments:null,fixed:null,cumStart:null,view:"dashboard",editing:null,invEditing:null,fixEditing:null,syncing:false,lastUpdatedBy:null,lastUpdatedAt:null};
+var state={user:null,year:new Date().getFullYear(),month:new Date().getMonth(),data:{},investments:null,fixed:null,cumStart:null,asOf:null,view:"dashboard",editing:null,invEditing:null,fixEditing:null,syncing:false,lastUpdatedBy:null,lastUpdatedAt:null};
 var unsub=null;
 function getMonth(){return state.data[mkey(state.year,state.month)]||emptyMonth()}
 function totals(sec){return(getMonth()[sec]||[]).reduce(function(s,i){return s+i.amount},0)}
@@ -302,12 +302,21 @@ function getInv(){
       name:r.name,
       opening:(r.opening!==undefined&&r.opening!==null)?r.opening:(r.inv||0),
       pl:r.pl||0,
+      plHist:(r.plHist&&Object.keys(r.plHist).length)?r.plHist:((r.pl||0)!==0?(function(){var o={};o[latestKey()]=r.pl;return o})():{}),
       link:r.link||"",
       type:r.type||"invest"
     };
   });
 }
-function getFixed(){return state.fixed||clone(DEFAULT_FIXED)}
+function getFixed(){
+  var list=state.fixed||clone(DEFAULT_FIXED);
+  return list.map(function(r){
+    return {
+      id:r.id,name:r.name,cost:r.cost||0,val:r.val||0,
+      valHist:(r.valHist&&Object.keys(r.valHist).length)?r.valHist:((r.val||0)!==0?(function(){var o={};o[latestKey()]=r.val;return o})():{})
+    };
+  });
+}
 
 // Every unique savings row label used across all months
 function allSavingsLabels(){
@@ -318,15 +327,41 @@ function allSavingsLabels(){
   });
   return Object.keys(set).sort();
 }
-// Total contributed to a given savings label across every month
-function contribFor(label){
+// Newest month we know about
+function latestKey(){
+  var ks=Object.keys(state.data).sort();
+  return ks.length?ks[ks.length-1]:mkey(state.year,state.month);
+}
+// Every month selectable in the "viewing" picker (data months + this month)
+function asOfOptions(){
+  var set={};
+  Object.keys(state.data).forEach(function(k){set[k]=true});
+  set[mkey(new Date().getFullYear(),new Date().getMonth())]=true;
+  return Object.keys(set).sort();
+}
+function currentAsOf(){
+  var opts=asOfOptions();
+  if(state.asOf&&opts.indexOf(state.asOf)!==-1)return state.asOf;
+  return opts.length?opts[opts.length-1]:mkey(state.year,state.month);
+}
+// Total contributed to a savings label, counting months up to and including asOf
+function contribFor(label,asOf){
   if(!label)return 0;
+  if(!asOf)asOf=currentAsOf();
   var t=0;
   Object.keys(state.data).forEach(function(k){
+    if(k>asOf)return;
     var m=state.data[k];if(!m||!m.savings)return;
     m.savings.forEach(function(i){if(i.label===label)t+=(i.amount||0)});
   });
   return t;
+}
+// Latest recorded snapshot at or before asOf -> {key,val} or null
+function histAsOf(hist,asOf){
+  if(!hist)return null;
+  var best=null;
+  Object.keys(hist).forEach(function(k){if(k<=asOf&&(best===null||k>best))best=k});
+  return best===null?null:{key:best,val:hist[best]};
 }
 
 function startSync(){
@@ -486,13 +521,24 @@ auth.onAuthStateChanged(function(u){state.user=u;if(u)startSync();else{state.dat
 // WEALTH VIEW (cumulative savings + investments)
 // ═══════════════════════════════════════
 function renderWealth(){
-  var keys=allMonthKeys();
-  var range=cumRange();
+  var asOf=currentAsOf();
+  var isPast=asOf<latestKey();
+  var keys=allMonthKeys().filter(function(k){return k<=asOf});
+  var range=cumRange().filter(function(k){return k<=asOf});
   var cumTotal=0;
   range.forEach(function(k){cumTotal+=savingsOf(k)});
   var avg=range.length?cumTotal/range.length:0;
 
   var h='<div class="header"><div class="header-label">Wealth</div><div class="month-nav"><h1 style="font-size:20px">Savings &amp; Assets</h1></div></div><div class="content">';
+
+  // ── As-of month picker ──
+  h+='<div class="dash-card fade-up" style="'+(isPast?'border-color:rgba(251,191,36,0.3);background:rgba(251,191,36,0.04)':'')+'"><div class="sel-row" style="margin-bottom:0"><label>Viewing</label><select class="msel" onchange="setAsOf(this.value)">';
+  asOfOptions().slice().reverse().forEach(function(k){
+    h+='<option value="'+k+'"'+(k===asOf?' selected':'')+'>'+keyLabel(k)+(k===latestKey()?' (latest)':'')+'</option>';
+  });
+  h+='</select></div>';
+  if(isPast)h+='<div style="font-size:9px;color:#fbbf24;margin-top:8px;line-height:1.6">⏳ Historical view — showing where you stood at the end of '+keyLabel(asOf)+'. Editing here records values against that month.</div>';
+  h+='</div>';
 
   // ── Cumulative savings ──
   h+='<div class="big-card fade-up"><div class="big-label">Total Contributed</div><div class="big-val" style="color:var(--savings)">'+cur(cumTotal)+'</div>';
@@ -523,10 +569,14 @@ function renderWealth(){
   // ── Holdings (auto-linked to monthly savings) ──
   var inv=getInv();
   var sumAdd=0,sumPL=0,cashBal=0,investBal=0;
+  var stalePL=false;
   inv.forEach(function(r){
-    var add=contribFor(r.link);
+    var add=contribFor(r.link,asOf);
     var bal=(r.opening||0)+add;
-    sumAdd+=add;sumPL+=(r.pl||0);
+    var snap=histAsOf(r.plHist,asOf);
+    var plv=snap?snap.val:0;
+    if(snap&&snap.key!==asOf&&r.type!=='cash'&&plv!==0)stalePL=true;
+    sumAdd+=add;sumPL+=plv;
     if(r.type==='cash')cashBal+=bal;else investBal+=bal;
   });
   var sumInv=cashBal+investBal;
@@ -538,6 +588,7 @@ function renderWealth(){
   h+='<div class="big-card fade-up d2" style="background:linear-gradient(135deg,rgba(251,191,36,0.08),rgba(96,165,250,0.05))"><div class="big-label">Total Holdings</div><div class="big-val" style="color:var(--income)">'+cur(sumTot)+'</div>';
   h+='<div class="mini-grid"><div class="mini-box"><div class="v" style="color:var(--savings)">'+cur(cashBal)+'</div><div class="l">💵 Cash</div></div><div class="mini-box"><div class="v" style="color:var(--needs)">'+cur(investBal)+'</div><div class="l">📈 Invested</div></div><div class="mini-box"><div class="v" style="color:'+(sumPL>=0?'var(--savings)':'var(--danger)')+'">'+cur(sumPL)+'</div><div class="l">P/L</div></div></div>';
   if(sumAdd>0)h+='<div class="big-sub" style="margin-top:8px">🔗 '+cur(sumAdd)+' of that was added automatically from your monthly savings</div>';
+  if(stalePL)h+='<div class="big-sub" style="margin-top:4px;color:#fbbf2499">⏳ Some P/L figures are carried over from an earlier month</div>';
   h+='</div>';
 
   h+='<div class="dash-card fade-up d3"><div class="dash-title" style="color:var(--income)">💼 Holdings</div>';
@@ -552,24 +603,27 @@ function renderWealth(){
   h+='<div class="inv-head"><div class="inv-c1">Asset</div><div class="inv-c2">Invested</div><div class="inv-c3">P/L</div><div class="inv-c4">Total</div><div class="inv-acts"></div></div>';
 
   inv.forEach(function(r){
-    var add=contribFor(r.link);
+    var add=contribFor(r.link,asOf);
     var invested=(r.opening||0)+add;
+    var snap=histAsOf(r.plHist,asOf);
+    var plv=snap?snap.val:0;
+    var plNote=(r.type==='cash')?'':(snap?(snap.key===asOf?'':'as of '+keyLabel(snap.key)):'not recorded');
     if(state.invEditing===r.id){
       h+='<div class="inv-edit"><input class="n" id="iv-name" value="'+esc(r.name)+'" placeholder="Asset name">';
       h+='<select class="msel" id="iv-type" style="flex:1 1 100%"><option value="invest"'+(r.type!=='cash'?' selected':'')+'>📈 Investment — has profit / loss</option><option value="cash"'+(r.type==='cash'?' selected':'')+'>💵 Cash / savings — no profit or loss</option></select>';
       h+='<select class="msel" id="iv-link" style="flex:1 1 100%"><option value="">🔗 Not linked to a monthly row</option>';
-      labels.forEach(function(l){h+='<option value="'+esc(l)+'"'+(l===r.link?' selected':'')+'>🔗 '+esc(l)+' &nbsp;('+cur(contribFor(l))+' so far)</option>'});
+      labels.forEach(function(l){h+='<option value="'+esc(l)+'"'+(l===r.link?' selected':'')+'>🔗 '+esc(l)+' &nbsp;('+cur(contribFor(l,asOf))+' so far)</option>'});
       h+='</select>';
       h+='<input class="a" id="iv-open" type="text" inputmode="decimal" value="'+(r.opening||0)+'" placeholder="Starting amount">';
       h+='<button class="sign-btn" onclick="flipSign(\'iv-pl\')" title="Switch between profit and loss">±</button>';
-      h+='<input class="a" id="iv-pl" type="text" inputmode="decimal" value="'+(r.pl||0)+'" placeholder="P/L">';
+      h+='<input class="a" id="iv-pl" type="text" inputmode="decimal" value="'+plv+'" placeholder="P/L">';
       h+='<button class="edit-save" style="background:var(--income)" onclick="saveInvRow(\''+r.id+'\')">OK</button>';
-      h+='<div style="flex:1 1 100%;font-size:9px;color:var(--text3);margin-top:2px;line-height:1.6">Starting amount = what you already held before tracking here. Monthly contributions get added on top automatically.</div></div>';
+      h+='<div style="flex:1 1 100%;font-size:9px;color:var(--text3);margin-top:2px;line-height:1.6">Starting amount = what you already held before tracking here. Monthly contributions add on top automatically. P/L is saved against '+keyLabel(asOf)+'.</div></div>';
     } else {
-      var tot=invested+(r.pl||0);
-      h+='<div class="inv-row"><div class="inv-c1"><div>'+(r.type==='cash'?'💵 ':'')+esc(r.name)+'</div>'+(add>0?'<div class="inv-sub">🔗 '+esc(r.link)+' &nbsp;+'+cur(add)+'</div>':'')+'</div>';
+      var tot=invested+plv;
+      h+='<div class="inv-row"><div class="inv-c1"><div>'+(r.type==='cash'?'💵 ':'')+esc(r.name)+'</div>'+(add>0?'<div class="inv-sub">🔗 '+esc(r.link)+' &nbsp;+'+cur(add)+'</div>':'')+(plNote?'<div class="inv-sub" style="color:#fbbf2499">⏳ P/L '+plNote+'</div>':'')+'</div>';
       h+='<div class="inv-c2" style="color:var(--text2)">'+cur(invested)+'</div>';
-      h+='<div class="inv-c3" style="color:'+((r.pl||0)>=0?'var(--savings)':'var(--danger)')+'">'+cur(r.pl||0)+'</div>';
+      h+='<div class="inv-c3" style="color:'+(plv>=0?'var(--savings)':'var(--danger)')+'">'+cur(plv)+'</div>';
       h+='<div class="inv-c4" style="color:var(--income)">'+cur(tot)+'</div>';
       h+='<div class="inv-acts"><button class="item-btn" onclick="editInvRow(\''+r.id+'\')">'+eico()+'</button><button class="item-btn" onclick="delInvRow(\''+r.id+'\')">'+dico()+'</button></div></div>';
     }
@@ -581,7 +635,10 @@ function renderWealth(){
   // ── Fixed assets (land / property) ──
   var fx=getFixed();
   var fCost=0,fVal=0;
-  fx.forEach(function(r){fCost+=(r.cost||0);fVal+=(r.val||0)});
+  fx.forEach(function(r){
+    var vs=histAsOf(r.valHist,asOf);
+    fCost+=(r.cost||0);fVal+=(vs?vs.val:0);
+  });
   var fChange=fVal-fCost;
 
   h+='<div class="big-card fade-up d3" style="background:linear-gradient(135deg,rgba(167,139,250,0.09),rgba(96,165,250,0.05))"><div class="big-label">Fixed Assets Value</div><div class="big-val" style="color:#a78bfa">'+cur(fVal)+'</div>';
@@ -593,15 +650,18 @@ function renderWealth(){
   if(!fx.length){h+='<div class="empty-msg">No fixed assets yet — tap "Add property" below</div>'}
 
   fx.forEach(function(r){
+    var vsnap=histAsOf(r.valHist,asOf);
+    var vval=vsnap?vsnap.val:0;
+    var vNote=vsnap?(vsnap.key===asOf?'':'as of '+keyLabel(vsnap.key)):'not recorded';
     if(state.fixEditing===r.id){
       h+='<div class="inv-edit"><input class="n" id="fx-name" value="'+esc(r.name)+'" placeholder="e.g. Apartment / Land plot">'+
          '<input class="a" id="fx-cost" type="text" inputmode="decimal" value="'+(r.cost||0)+'" placeholder="Cost paid">'+
-         '<input class="a" id="fx-val" type="text" inputmode="decimal" value="'+(r.val||0)+'" placeholder="Current value">'+
+         '<input class="a" id="fx-val" type="text" inputmode="decimal" value="'+vval+'" placeholder="Current value">'+
          '<button class="edit-save" style="background:#a78bfa" onclick="saveFixRow(\''+r.id+'\')">OK</button>'+
-         '<div style="flex:1 1 100%;font-size:9px;color:var(--text3);margin-top:2px">Cost = what you paid &bull; Value = what it\'s worth now</div></div>';
+         '<div style="flex:1 1 100%;font-size:9px;color:var(--text3);margin-top:2px">Cost = what you paid &bull; Value = worth at '+keyLabel(asOf)+'</div></div>';
     } else {
-      var ch=(r.val||0)-(r.cost||0);
-      h+='<div class="inv-row"><div class="inv-c1">'+esc(r.name)+'</div><div class="inv-c2" style="color:var(--text2)">'+cur(r.cost||0)+'</div><div class="inv-c3" style="color:#a78bfa">'+cur(r.val||0)+'</div><div class="inv-c4" style="color:'+(ch>=0?'var(--savings)':'var(--danger)')+'">'+cur(ch)+'</div><div class="inv-acts"><button class="item-btn" onclick="editFixRow(\''+r.id+'\')">'+eico()+'</button><button class="item-btn" onclick="delFixRow(\''+r.id+'\')">'+dico()+'</button></div></div>';
+      var ch=vval-(r.cost||0);
+      h+='<div class="inv-row"><div class="inv-c1"><div>'+esc(r.name)+'</div>'+(vNote?'<div class="inv-sub" style="color:#a78bfa99">⏳ value '+vNote+'</div>':'')+'</div><div class="inv-c2" style="color:var(--text2)">'+cur(r.cost||0)+'</div><div class="inv-c3" style="color:#a78bfa">'+cur(vval)+'</div><div class="inv-c4" style="color:'+(ch>=0?'var(--savings)':'var(--danger)')+'">'+cur(ch)+'</div><div class="inv-acts"><button class="item-btn" onclick="editFixRow(\''+r.id+'\')">'+eico()+'</button><button class="item-btn" onclick="delFixRow(\''+r.id+'\')">'+dico()+'</button></div></div>';
     }
   });
 
@@ -641,6 +701,7 @@ function tabBar(){
 // Wealth actions
 window.setCumStart=function(v){state.cumStart=v;pushAll()};
 // ± toggle for loss values (iOS number pad has no minus key)
+window.setAsOf=function(v){state.asOf=v;state.invEditing=null;state.fixEditing=null;render()};
 window.flipSign=function(id){
   var e=document.getElementById(id);if(!e)return;
   var v=(e.value||"").trim();
@@ -659,8 +720,14 @@ window.saveInvRow=function(id){
   var link=linkEl?linkEl.value:"";
   var typeEl=document.getElementById('iv-type');
   var type=typeEl?typeEl.value:'invest';
+  var asOf=currentAsOf();
   var opening=num('iv-open'),pl=(type==='cash'?0:num('iv-pl'));
-  list=list.map(function(r){return r.id===id?{id:id,name:name||r.name,opening:opening,pl:pl,link:link,type:type}:r});
+  list=list.map(function(r){
+    if(r.id!==id)return r;
+    var hist=clone(r.plHist||{});
+    if(type==='cash'){delete hist[asOf]}else{hist[asOf]=pl}
+    return {id:id,name:name||r.name,opening:opening,pl:pl,plHist:hist,link:link,type:type};
+  });
   state.invEditing=null;saveInv(list);
 };
 window.delInvRow=function(id){
@@ -669,7 +736,7 @@ window.delInvRow=function(id){
 };
 window.addInvRow=function(){
   var list=clone(getInv()),nid=uid();
-  list.push({id:nid,name:"New Asset",opening:0,pl:0,link:"",type:"invest"});
+  list.push({id:nid,name:"New Asset",opening:0,pl:0,plHist:{},link:"",type:"invest"});
   state.invEditing=nid;state.fixEditing=null;saveInv(list);
 };
 // Create a holding for every monthly savings row that isn't linked yet
@@ -678,7 +745,7 @@ window.createFromLabels=function(){
   var linked={};list.forEach(function(r){if(r.link)linked[r.link]=true});
   var added=0;
   allSavingsLabels().forEach(function(l){
-    if(!linked[l]){list.push({id:uid(),name:l,opening:0,pl:0,link:l,type:"invest"});added++}
+    if(!linked[l]){list.push({id:uid(),name:l,opening:0,pl:0,plHist:{},link:l,type:"invest"});added++}
   });
   if(added)saveInv(list);
 };
@@ -689,7 +756,13 @@ window.saveFixRow=function(id){
   var list=clone(getFixed());
   var name=document.getElementById('fx-name').value.trim();
   var cost=num('fx-cost'),val=num('fx-val');
-  list=list.map(function(r){return r.id===id?{id:id,name:name||r.name,cost:cost,val:val}:r});
+  var asOf=currentAsOf();
+  list=list.map(function(r){
+    if(r.id!==id)return r;
+    var hist=clone(r.valHist||{});
+    hist[asOf]=val;
+    return {id:id,name:name||r.name,cost:cost,val:val,valHist:hist};
+  });
   state.fixEditing=null;saveFixed(list);
 };
 window.delFixRow=function(id){
@@ -698,7 +771,7 @@ window.delFixRow=function(id){
 };
 window.addFixRow=function(){
   var list=clone(getFixed()),nid=uid();
-  list.push({id:nid,name:"New Property",cost:0,val:0});
+  list.push({id:nid,name:"New Property",cost:0,val:0,valHist:{}});
   state.fixEditing=nid;state.invEditing=null;saveFixed(list);
 };
 
@@ -716,22 +789,25 @@ window.purgeBefore=function(){
 };
 
 window.exportWealthCSV=function(){
-  var range=cumRange(),rows=[["Wealth Report"],["Generated",new Date().toLocaleString()],[""],["MONTHLY CONTRIBUTIONS (savings rate)"],["Month","Contributed"]];
+  var aoK=currentAsOf();
+  var range=cumRange().filter(function(k){return k<=aoK}),rows=[["Wealth Report"],["As of",keyLabel(aoK)],["Generated",new Date().toLocaleString()],[""],["MONTHLY CONTRIBUTIONS (savings rate)"],["Month","Contributed"]];
   var cum=0;range.forEach(function(k){var v=savingsOf(k);cum+=v;rows.push([keyLabel(k),v.toFixed(2)])});
   rows.push(["TOTAL CONTRIBUTED",cum.toFixed(2)]);rows.push([""]);
   rows.push(["HOLDINGS"]);rows.push(["Asset","Type","Linked monthly row","Starting amount","Auto-added","Balance","Unrealised P/L","Total"]);
   var so=0,sa=0,sp=0;
+  var asOf=currentAsOf();
   getInv().forEach(function(r){
-    var add=contribFor(r.link),invd=(r.opening||0)+add;
-    so+=(r.opening||0);sa+=add;sp+=(r.pl||0);
-    rows.push([r.name,(r.type==='cash'?"Cash":"Investment"),r.link||"—",(r.opening||0).toFixed(2),add.toFixed(2),invd.toFixed(2),(r.pl||0).toFixed(2),(invd+(r.pl||0)).toFixed(2)]);
+    var add=contribFor(r.link,asOf),invd=(r.opening||0)+add;
+    var sn=histAsOf(r.plHist,asOf),plv=sn?sn.val:0;
+    so+=(r.opening||0);sa+=add;sp+=plv;
+    rows.push([r.name,(r.type==='cash'?"Cash":"Investment"),r.link||"—",(r.opening||0).toFixed(2),add.toFixed(2),invd.toFixed(2),plv.toFixed(2),(invd+plv).toFixed(2)]);
   });
   var si=so+sa;
   rows.push(["TOTAL","","",so.toFixed(2),sa.toFixed(2),si.toFixed(2),sp.toFixed(2),(si+sp).toFixed(2)]);
   rows.push([""]);
   rows.push(["FIXED ASSETS (LAND / PROPERTY)"]);rows.push(["Asset","Cost Paid","Current Value","Change"]);
   var fc=0,fv=0;
-  getFixed().forEach(function(r){fc+=(r.cost||0);fv+=(r.val||0);rows.push([r.name,(r.cost||0).toFixed(2),(r.val||0).toFixed(2),((r.val||0)-(r.cost||0)).toFixed(2)])});
+  getFixed().forEach(function(r){var vs=histAsOf(r.valHist,asOf),vv=vs?vs.val:0;fc+=(r.cost||0);fv+=vv;rows.push([r.name,(r.cost||0).toFixed(2),vv.toFixed(2),(vv-(r.cost||0)).toFixed(2)])});
   rows.push(["TOTAL",fc.toFixed(2),fv.toFixed(2),(fv-fc).toFixed(2)]);
   rows.push([""]);
   rows.push(["NET WORTH"]);
@@ -739,7 +815,7 @@ window.exportWealthCSV=function(){
   rows.push(["Property Value",fv.toFixed(2)]);
   rows.push(["TOTAL NET WORTH",(si+sp+fv).toFixed(2)]);
   var csv=rows.map(function(r){return r.map(function(c){return'"'+String(c).replace(/"/g,'""')+'"'}).join(",")}).join("\n");
-  var a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download="Wealth_Report.csv";a.click();
+  var a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download="Wealth_"+aoK+".csv";a.click();
 };
 
 // RENDER
