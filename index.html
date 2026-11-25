@@ -141,6 +141,15 @@ input[type=number]{-moz-appearance:textfield}
 .mini-grid{display:flex;gap:8px;margin-top:10px}
 .mini-box{flex:1;background:rgba(255,255,255,0.03);border-radius:10px;padding:8px;text-align:center}
 .mini-box .v{font-size:13px;font-weight:700;font-family:var(--mono)}
+.rec-grid{display:flex;gap:6px;margin-bottom:8px}
+.rec-f{flex:1;min-width:0}
+.rec-f label{display:block;font-size:9px;color:var(--text3);margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rec-f input{width:100%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:8px 7px;color:#fff;font-size:12px;font-family:var(--mono);outline:none}
+.rec-f input:focus{border-color:rgba(52,211,153,0.45)}
+.rec-chk{display:flex;align-items:center;gap:6px;font-size:9.5px;color:var(--text3);margin-bottom:8px}
+.rec-chk input{width:13px;height:13px;accent-color:#34d399}
+.rec-save{width:100%;background:rgba(52,211,153,0.12);border:1px solid rgba(52,211,153,0.3);border-radius:9px;padding:9px;color:#34d399;font-size:11px;font-weight:700}
+.rec-msg{font-size:10px;line-height:1.65;color:var(--text2);margin-top:10px;padding:9px 10px;border-radius:8px;background:rgba(255,255,255,0.03)}
 .mini-box .l{font-size:8px;color:var(--text3);margin-top:2px}
 .inv-head{display:flex;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.08);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px}
 .inv-row{display:flex;align-items:center;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.04);font-size:11px}
@@ -290,7 +299,7 @@ var DEFAULT_INV=[
 
 var DEFAULT_FIXED=[];
 
-var state={user:null,year:new Date().getFullYear(),month:new Date().getMonth(),data:{},investments:null,fixed:null,cumStart:null,asOf:null,view:"dashboard",editing:null,invEditing:null,fixEditing:null,syncing:false,lastUpdatedBy:null,lastUpdatedAt:null};
+var state={user:null,year:new Date().getFullYear(),month:new Date().getMonth(),data:{},investments:null,fixed:null,cumStart:null,asOf:null,view:"dashboard",showDanger:false,editing:null,invEditing:null,fixEditing:null,syncing:false,lastUpdatedBy:null,lastUpdatedAt:null};
 var unsub=null;
 function getMonth(){return state.data[mkey(state.year,state.month)]||emptyMonth()}
 function totals(sec){return(getMonth()[sec]||[]).reduce(function(s,i){return s+i.amount},0)}
@@ -346,6 +355,11 @@ function currentAsOf(){
   return opts.length?opts[opts.length-1]:mkey(state.year,state.month);
 }
 // Total contributed to a savings label, counting months up to and including asOf
+function fixValAsOf(r,asOf){
+  var snap=histAsOf(r.valHist,asOf);
+  if(snap)return{val:snap.val,note:(snap.key===asOf?'':'value as of '+keyLabel(snap.key)),estimated:false};
+  return{val:(r.cost||0),note:'shown at cost \u2014 no valuation by '+keyLabel(asOf),estimated:true};
+}
 function contribFor(label,asOf){
   if(!label)return 0;
   if(!asOf)asOf=currentAsOf();
@@ -431,6 +445,15 @@ window.exportCSV=function(){
   });
   var tn=totals("needs"),tw=totals("wants"),ts=totals("savings");
   rows.push(["SUMMARY"]);rows.push(["Income",ti.toFixed(2)]);rows.push(["Spent",(tn+tw+ts).toFixed(2)]);rows.push(["Remaining",(ti-tn-tw-ts).toFixed(2)]);
+  var rc=md.recon||{};
+  if(typeof rc.open==="number"&&typeof rc.close==="number"){
+    var mi=(typeof rc.inAmt==="number")?rc.inAmt:ti;
+    var pl=tn+tw+((rc.savingsOut!==false)?ts:0);
+    var ac=rc.open+mi-rc.close;
+    rows.push([""]);rows.push(["RECONCILIATION"]);
+    rows.push(["Opening balance",rc.open.toFixed(2)]);rows.push(["Money in",mi.toFixed(2)]);rows.push(["Closing balance",rc.close.toFixed(2)]);
+    rows.push(["Actually left account",ac.toFixed(2)]);rows.push(["Planned out",pl.toFixed(2)]);rows.push(["Gap",(ac-pl).toFixed(2)]);
+  }
   var csv=rows.map(function(r){return r.map(function(c){return'"'+String(c).replace(/"/g,'""')+'"'}).join(",")}).join("\n");
   var a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download="Budget_"+MONTHS[state.month]+"_"+state.year+".csv";a.click();
 };
@@ -444,6 +467,13 @@ function lastBackupLabel(){
     if(days===1)return"backed up 1 day ago";
     return"backed up "+days+" days ago";
   }catch(e){return""}
+}
+function backedUpToday(){
+  try{
+    var v=localStorage.getItem("bt_last_backup");
+    if(!v)return false;
+    return new Date(v).toDateString()===new Date().toDateString();
+  }catch(e){return false}
 }
 function markBackedUp(){try{localStorage.setItem("bt_last_backup",new Date().toISOString())}catch(e){}}
 
@@ -730,8 +760,7 @@ function renderWealth(){
   var fx=getFixed();
   var fCost=0,fVal=0;
   fx.forEach(function(r){
-    var vs=histAsOf(r.valHist,asOf);
-    fCost+=(r.cost||0);fVal+=(vs?vs.val:0);
+    fCost+=(r.cost||0);fVal+=fixValAsOf(r,asOf).val;
   });
   var fChange=fVal-fCost;
 
@@ -744,9 +773,9 @@ function renderWealth(){
   if(!fx.length){h+='<div class="empty-msg">No fixed assets yet — tap "Add property" below</div>'}
 
   fx.forEach(function(r){
-    var vsnap=histAsOf(r.valHist,asOf);
-    var vval=vsnap?vsnap.val:0;
-    var vNote=vsnap?(vsnap.key===asOf?'':'as of '+keyLabel(vsnap.key)):'not recorded';
+    var vinfo=fixValAsOf(r,asOf);
+    var vval=vinfo.val;
+    var vNote=vinfo.note;
     if(state.fixEditing===r.id){
       h+='<div class="inv-edit"><input class="n" id="fx-name" value="'+esc(r.name)+'" placeholder="e.g. Apartment / Land plot">'+
          '<input class="a" id="fx-cost" type="text" inputmode="decimal" value="'+(r.cost||0)+'" placeholder="Cost paid">'+
@@ -755,7 +784,7 @@ function renderWealth(){
          '<div style="flex:1 1 100%;font-size:9px;color:var(--text3);margin-top:2px">Cost = what you paid &bull; Value = worth at '+keyLabel(asOf)+'</div></div>';
     } else {
       var ch=vval-(r.cost||0);
-      h+='<div class="inv-row"><div class="inv-c1"><div>'+esc(r.name)+'</div>'+(vNote?'<div class="inv-sub" style="color:#a78bfa99">⏳ value '+vNote+'</div>':'')+'</div><div class="inv-c2" style="color:var(--text2)">'+cur(r.cost||0)+'</div><div class="inv-c3" style="color:#a78bfa">'+cur(vval)+'</div><div class="inv-c4" style="color:'+(ch>=0?'var(--savings)':'var(--danger)')+'">'+cur(ch)+'</div><div class="inv-acts"><button class="item-btn" onclick="editFixRow(\''+r.id+'\')">'+eico()+'</button><button class="item-btn" onclick="delFixRow(\''+r.id+'\')">'+dico()+'</button></div></div>';
+      h+='<div class="inv-row"><div class="inv-c1"><div>'+esc(r.name)+'</div>'+(vNote?'<div class="inv-sub" style="color:#a78bfa99">⏳ '+esc(vNote)+'</div>':'')+'</div><div class="inv-c2" style="color:var(--text2)">'+cur(r.cost||0)+'</div><div class="inv-c3" style="color:#a78bfa">'+cur(vval)+'</div><div class="inv-c4" style="color:'+(ch>=0?'var(--savings)':'var(--danger)')+'">'+cur(ch)+'</div><div class="inv-acts"><button class="item-btn" onclick="editFixRow(\''+r.id+'\')">'+eico()+'</button><button class="item-btn" onclick="delFixRow(\''+r.id+'\')">'+dico()+'</button></div></div>';
     }
   });
 
@@ -770,12 +799,22 @@ function renderWealth(){
 
   // ── Manage data ──
   if(keys.length>1){
-    h+='<div class="dash-card fade-up d4"><div class="dash-title" style="color:var(--danger)">🗑 Clean up old months</div>';
-    h+='<div style="font-size:10px;color:var(--text3);line-height:1.6;margin-bottom:10px">Deletes months you no longer want. Old savings row names disappear from the link list too.</div>';
-    h+='<div class="sel-row"><label>Keep from</label><select class="msel" id="purge-sel">';
-    keys.forEach(function(k,i){h+='<option value="'+k+'"'+(i===0?' selected':'')+'>'+keyLabel(k)+'</option>'});
-    h+='</select></div>';
-    h+='<button onclick="purgeBefore()" style="width:100%;background:rgba(255,107,107,0.1);border:1px solid rgba(255,107,107,0.28);border-radius:9px;padding:10px;color:#ff8b8b;font-size:11px;font-weight:700">Delete everything before this month</button></div>';
+    if(!state.showDanger){
+      h+='<div style="text-align:center;margin:18px 0 4px"><button onclick="toggleDanger()" style="background:none;border:none;color:var(--text4);font-size:10px;letter-spacing:0.4px">⚙️ Advanced</button></div>';
+    } else {
+      h+='<div class="dash-card fade-up d4" style="border-color:rgba(255,107,107,0.22)"><div class="dash-title" style="color:var(--danger)">🗑 Clean up old months</div>';
+      h+='<div style="font-size:10px;color:var(--text3);line-height:1.6;margin-bottom:10px">Permanently deletes months, for both of you. Old savings row names disappear from the link list too. There is no undo.</div>';
+      h+='<div style="font-size:10px;line-height:1.6;margin-bottom:10px;padding:8px 10px;border-radius:8px;background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.2);color:#fbbf24">⚠️ A backup from today is required. Status: '+esc(lastBackupLabel())+'</div>';
+      if(!backedUpToday()){
+        h+='<button onclick="backupJSON()" style="width:100%;background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.3);border-radius:9px;padding:10px;color:#fbbf24;font-size:11px;font-weight:700;margin-bottom:8px">💾 Back up now to unlock</button>';
+      }
+      h+='<div class="sel-row"><label>Keep from</label><select class="msel" id="purge-sel">';
+      keys.forEach(function(k,i){h+='<option value="'+k+'"'+(i===0?' selected':'')+'>'+keyLabel(k)+'</option>'});
+      h+='</select></div>';
+      var ok=backedUpToday();
+      h+='<button onclick="purgeBefore()"'+(ok?'':' disabled')+' style="width:100%;background:rgba(255,107,107,'+(ok?'0.1':'0.03')+');border:1px solid rgba(255,107,107,'+(ok?'0.28':'0.1')+');border-radius:9px;padding:10px;color:'+(ok?'#ff8b8b':'rgba(255,139,139,0.3)')+';font-size:11px;font-weight:700">Delete everything before this month</button>';
+      h+='<div style="text-align:center;margin-top:10px"><button onclick="toggleDanger()" style="background:none;border:none;color:var(--text4);font-size:10px">Hide</button></div></div>';
+    }
   }
 
   h+='<div class="export-row"><button class="export-btn" onclick="exportWealthCSV()">📥 Export Wealth CSV</button></div>';
@@ -794,6 +833,7 @@ function tabBar(){
 
 // Wealth actions
 window.setCumStart=function(v){state.cumStart=v;pushAll()};
+window.toggleDanger=function(){state.showDanger=!state.showDanger;render()};
 // ± toggle for loss values (iOS number pad has no minus key)
 window.setAsOf=function(v){state.asOf=v;state.invEditing=null;state.fixEditing=null;render()};
 window.flipSign=function(id){
@@ -871,12 +911,15 @@ window.addFixRow=function(){
 
 // Delete every month earlier than the one selected
 window.purgeBefore=function(){
+  if(!backedUpToday()){alert("Take a backup first.\n\nTap “Back up now to unlock”, check the downloaded file, then try again.");return}
   var el=document.getElementById('purge-sel');if(!el)return;
   var cut=el.value;
   var doomed=Object.keys(state.data).filter(function(k){return k<cut});
   if(!doomed.length){alert("Nothing to delete — that's already the earliest month.");return}
   var names=doomed.map(keyLabel).join(", ");
   if(!confirm("Permanently delete "+doomed.length+" month"+(doomed.length>1?"s":"")+"?\n\n"+names+"\n\nThis affects both of you and can't be undone."))return;
+  var typed=prompt("Type DELETE in capitals to confirm removing "+doomed.length+" month"+(doomed.length>1?"s":"")+".");
+  if(typed!=="DELETE"){alert("Cancelled. Nothing was deleted.");return}
   doomed.forEach(function(k){delete state.data[k]});
   if(state.cumStart&&state.cumStart<cut)state.cumStart=cut;
   pushAll();
@@ -901,7 +944,7 @@ window.exportWealthCSV=function(){
   rows.push([""]);
   rows.push(["FIXED ASSETS (LAND / PROPERTY)"]);rows.push(["Asset","Cost Paid","Current Value","Change"]);
   var fc=0,fv=0;
-  getFixed().forEach(function(r){var vs=histAsOf(r.valHist,asOf),vv=vs?vs.val:0;fc+=(r.cost||0);fv+=vv;rows.push([r.name,(r.cost||0).toFixed(2),vv.toFixed(2),(vv-(r.cost||0)).toFixed(2)])});
+  getFixed().forEach(function(r){var vv=fixValAsOf(r,asOf).val;fc+=(r.cost||0);fv+=vv;rows.push([r.name,(r.cost||0).toFixed(2),vv.toFixed(2),(vv-(r.cost||0)).toFixed(2)])});
   rows.push(["TOTAL",fc.toFixed(2),fv.toFixed(2),(fv-fc).toFixed(2)]);
   rows.push([""]);
   rows.push(["NET WORTH"]);
@@ -982,6 +1025,8 @@ function render(){
       h+='<div style="margin-bottom:8px"><div class="bar-label"><span style="color:var(--text2)">'+r.l+'</span><span style="font-weight:600;color:'+(r.a>r.t?"var(--danger)":r.c)+';font-family:var(--mono)">'+r.a+'% <span style="color:var(--text3)">/ '+r.t+'%</span></span></div><div class="rule-track"><div class="rule-marker" style="left:'+r.t+'%"></div><div class="bar-fill" style="width:'+Math.min(r.a,100)+'%;background:'+(r.a>r.t?"var(--danger)":r.c)+';height:100%;border-radius:2px"></div></div></div>';
     });
     h+='</div>';
+
+    h+=reconCard(md,ti,tn,tw,ts);
   }
 
   if(state.lastUpdatedBy){var ts2=state.lastUpdatedAt?state.lastUpdatedAt.toLocaleString():"";h+='<div class="updated-by">Last updated by '+esc(state.lastUpdatedBy)+(ts2?' &bull; '+ts2:'')+'</div>'}
@@ -993,6 +1038,39 @@ function render(){
   if(state.editing){var el=document.getElementById("edit-amount-input");if(el)el.focus()}
 }
 
+function recF(id,label,val){
+  return'<div class="rec-f"><label>'+label+'</label><input id="'+id+'" type="text" inputmode="decimal" value="'+(typeof val==="number"?val:"")+'" placeholder="0.00"></div>';
+}
+function reconCard(md,ti,tn,tw,ts){
+  var rc=md.recon||{};
+  var moneyIn=(typeof rc.inAmt==="number")?rc.inAmt:ti;
+  var savingsOut=rc.savingsOut!==false;
+  var planned=tn+tw+(savingsOut?ts:0);
+  var ready=(typeof rc.open==="number"&&typeof rc.close==="number");
+  var h='<div class="dash-card fade-up d4" style="border-color:rgba(52,211,153,0.18)">';
+  h+='<div class="dash-title" style="color:var(--savings)">\u2696\ufe0f Reconcile '+MONTHS[state.month]+' '+state.year+'</div>';
+  h+='<div style="font-size:10px;color:var(--text3);line-height:1.6;margin-bottom:10px">Balances beat memory. At month end, type what the account started and ended with \u2014 the gap finds itself.</div>';
+  h+='<div class="rec-grid">'+recF("rec-open","Opening",rc.open)+recF("rec-in","Money in",moneyIn)+recF("rec-close","Closing",rc.close)+'</div>';
+  h+='<label class="rec-chk"><input type="checkbox" id="rec-sv"'+(savingsOut?" checked":"")+'> Savings transfers leave this account</label>';
+  h+='<button class="rec-save" onclick="saveRecon()">Save reconciliation</button>';
+  if(ready){
+    var actual=rc.open+moneyIn-rc.close;
+    var gap=actual-planned;
+    var gc=Math.abs(gap)<1?"var(--savings)":(gap>0?"var(--danger)":"var(--income)");
+    h+='<div class="mini-grid"><div class="mini-box"><div class="v" style="color:var(--needs)">'+cur(actual)+'</div><div class="l">Actually left</div></div>'+
+       '<div class="mini-box"><div class="v" style="color:var(--text2)">'+cur(planned)+'</div><div class="l">Planned out</div></div>'+
+       '<div class="mini-box"><div class="v" style="color:'+gc+'">'+cur(gap)+'</div><div class="l">Gap</div></div></div>';
+    var msg;
+    if(Math.abs(gap)<1)msg="It tallies. Nothing unaccounted for this month.";
+    else if(gap>0)msg=cur(gap)+" more left the account than you planned. That is your untracked spending \u2014 no need to hunt receipts. Either raise the buffer next month, or accept it and move on.";
+    else msg="You spent "+cur(-gap)+" less than planned. Move it into savings before it quietly disappears.";
+    h+='<div class="rec-msg">'+msg+'</div>';
+  } else {
+    h+='<div class="empty-msg">Enter opening and closing balance to see the gap</div>';
+  }
+  h+='</div>';
+  return h;
+}
 function rSec(section,title,icon,color,budget,totalIncome,items){
   var total=0;items.forEach(function(i){total+=i.amount});
   var ba=totalIncome*budget/100,rm=ba-total,up=ba>0?pct(total,ba):0;
@@ -1016,7 +1094,18 @@ window.startEdit=function(s,id){state.editing={section:s,id:id};render()};
 window.saveEdit=function(sec,id){var md=getMonth(),lbl=document.getElementById("edit-label-input").value.trim(),amt=parseFloat(document.getElementById("edit-amount-input").value)||0;md[sec]=md[sec].map(function(i){return i.id===id?{id:i.id,label:lbl||i.label,amount:amt}:i});state.editing=null;save(md)};
 window.deleteItem=function(s,id){var md=getMonth();md[s]=md[s].filter(function(i){return i.id!==id});save(md)};
 window.addItem=function(s){var md=getMonth(),nid=uid();md[s].push({id:nid,label:"New Item",amount:0});state.editing={section:s,id:nid};save(md)};
-window.copyPrev=function(){var pm=state.month===0?11:state.month-1,py=state.month===0?state.year-1:state.year,prev=state.data[mkey(py,pm)];if(prev){var c=clone(prev);c.wants=c.wants.map(function(i){return{id:i.id,label:i.label,amount:0}});save(c)}else alert("No data for previous month")};
+window.copyPrev=function(){var pm=state.month===0?11:state.month-1,py=state.month===0?state.year-1:state.year,prev=state.data[mkey(py,pm)];if(prev){var c=clone(prev);delete c.recon;c.wants=c.wants.map(function(i){return{id:i.id,label:i.label,amount:0}});save(c)}else alert("No data for previous month")};
+window.saveRecon=function(){
+  function v(el){if(!el)return null;var t=String(el.value).replace(/[^0-9.\-]/g,'');if(t==='')return null;var n=parseFloat(t);return isNaN(n)?null:n}
+  var md=clone(getMonth());
+  md.recon={
+    open:v(document.getElementById('rec-open')),
+    inAmt:v(document.getElementById('rec-in')),
+    close:v(document.getElementById('rec-close')),
+    savingsOut:(function(){var e=document.getElementById('rec-sv');return e?e.checked:true})()
+  };
+  save(md);
+};
 window.resetMonth=function(){if(confirm("Reset this month?")){state.editing=null;save(emptyMonth())}};
 
 } // end startApp
