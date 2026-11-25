@@ -85,6 +85,7 @@ input[type=number]{-moz-appearance:textfield}
 .export-row{display:flex;gap:5px;margin-bottom:10px}
 .export-btn{flex:1;padding:8px 0;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02);color:var(--text3);font-weight:500;font-size:10px;display:flex;align-items:center;justify-content:center;gap:4px}
 .export-btn:active{background:rgba(255,255,255,0.05)}
+.backup-hint{font-size:9px;color:var(--text4);text-align:center;margin:-6px 0 10px;letter-spacing:0.3px}
 
 .section{background:var(--bg2);border-radius:var(--radius);padding:12px 10px;margin-bottom:8px;border:1px solid var(--border)}
 .section-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
@@ -434,6 +435,78 @@ window.exportCSV=function(){
   var a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download="Budget_"+MONTHS[state.month]+"_"+state.year+".csv";a.click();
 };
 
+function lastBackupLabel(){
+  try{
+    var v=localStorage.getItem("bt_last_backup");
+    if(!v)return"never backed up";
+    var days=Math.floor((Date.now()-new Date(v).getTime())/86400000);
+    if(days<=0)return"backed up today";
+    if(days===1)return"backed up 1 day ago";
+    return"backed up "+days+" days ago";
+  }catch(e){return""}
+}
+function markBackedUp(){try{localStorage.setItem("bt_last_backup",new Date().toISOString())}catch(e){}}
+
+window.backupJSON=function(){
+  db.collection("budgets").doc(DOC_ID).get().then(function(doc){
+    if(!doc.exists){alert("There is nothing stored yet, so there is nothing to back up.");return}
+    var d=doc.data();
+    var payload={
+      _app:"budget-tracker",
+      _backupVersion:1,
+      _docId:DOC_ID,
+      _exportedAt:new Date().toISOString(),
+      _exportedBy:(state.user&&(state.user.displayName||state.user.email))||null,
+      months:d.months||{},
+      investments:d.investments||[],
+      fixedAssets:d.fixedAssets||[],
+      cumStart:(typeof d.cumStart!=="undefined")?d.cumStart:null,
+      updatedByName:d.updatedByName||null,
+      updatedAt:(d.updatedAt&&d.updatedAt.toDate)?d.updatedAt.toDate().toISOString():null
+    };
+    var n=Object.keys(payload.months).length;
+    var stamp=new Date().toISOString().slice(0,10);
+    var url=URL.createObjectURL(new Blob([JSON.stringify(payload,null,2)],{type:"application/json"}));
+    var a=document.createElement("a");
+    a.href=url;a.download="BudgetBackup_"+stamp+".json";
+    document.body.appendChild(a);a.click();document.body.removeChild(a);
+    setTimeout(function(){URL.revokeObjectURL(url)},3000);
+    markBackedUp();render();
+    alert("Backup saved: "+n+" month(s) of data.\n\nKeep this file somewhere safe. It can restore everything.");
+  }).catch(function(e){alert("Backup failed: "+(e&&e.message?e.message:"unknown error")+"\n\nCheck your connection and try again.")});
+};
+
+window.restoreJSON=function(){
+  var inp=document.getElementById("restore-file");
+  if(inp){inp.value="";inp.click()}
+};
+
+window.handleRestoreFile=function(ev){
+  var f=ev.target.files&&ev.target.files[0];
+  if(!f)return;
+  var r=new FileReader();
+  r.onload=function(){
+    var d=null;
+    try{d=JSON.parse(r.result)}catch(e){alert("That file is not valid JSON. Pick a BudgetBackup_....json file.");return}
+    if(!d||typeof d.months!=="object"||d.months===null||Array.isArray(d.months)){
+      alert("That does not look like a Budget Tracker backup. It has no \"months\" data.");return;
+    }
+    var n=Object.keys(d.months).length;
+    var cur=Object.keys(state.data||{}).length;
+    var when=d._exportedAt?(" taken on "+d._exportedAt.slice(0,10)):"";
+    if(!confirm("Restore this backup"+when+"?\n\nBackup contains: "+n+" month(s)\nApp currently has: "+cur+" month(s)\n\nThe backup will REPLACE everything in the app, for both of you. This cannot be undone."))return;
+    if(!confirm("Last check — overwrite current data now?"))return;
+    state.data=d.months||{};
+    state.investments=(d.investments&&d.investments.length)?d.investments:null;
+    state.fixed=d.fixedAssets||null;
+    state.cumStart=(typeof d.cumStart!=="undefined")?d.cumStart:null;
+    pushAll();
+    alert("Restored. "+n+" month(s) loaded and syncing now.");
+  };
+  r.onerror=function(){alert("Could not read that file.")};
+  r.readAsText(f);
+};
+
 window.exportPDF=function(){
   var md=getMonth(),mn=MONTHS[state.month]+" "+state.year,ti=totals("income"),tn=totals("needs"),tw=totals("wants"),ts=totals("savings"),rem=ti-tn-tw-ts;
   var h='<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Budget '+mn+'</title><style>body{font-family:Arial,sans-serif;max-width:650px;margin:0 auto;padding:24px;color:#222;font-size:13px}h1{font-size:20px;border-bottom:2px solid #333;padding-bottom:6px;margin-bottom:16px}h2{font-size:14px;margin:16px 0 6px;color:#555}table{width:100%;border-collapse:collapse;margin-bottom:12px}th,td{padding:5px 8px;text-align:left;border-bottom:1px solid #e0e0e0;font-size:12px}th{background:#f5f5f5;font-weight:600}td:last-child,th:last-child{text-align:right}.total{font-weight:700;background:#f9f9f9}.box{background:#f0f7ff;padding:12px;border-radius:6px;margin-top:16px}.box td{border:none;padding:3px 8px}.over{color:#e53e3e}.ok{color:#38a169}@media print{body{padding:12px}}</style></head><body>';
@@ -478,7 +551,26 @@ window.copyAppLink=function(){
 // Set persistence once at startup (not inside the click handler)
 auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(function(){});
 // Complete any redirect-based sign-in
-auth.getRedirectResult().catch(function(e){console.log("redirect:",e.code)});
+function isLocalFile(){return location.protocol==="file:"}
+function authErrText(err){
+  var code=(err&&err.code)||"";
+  var host=location.hostname||"(none)";
+  if(isLocalFile()||code==="auth/operation-not-supported-in-this-environment"){
+    return'<b style="color:#ff9b9b">This page is open as a local file.</b><br>Google sign-in only works over http:// or https://.<br><br>Open it from your GitHub Pages address instead, e.g.<br><span style="color:rgba(255,255,255,0.6)">https://yourname.github.io/budget/</span>';
+  }
+  if(code==="auth/unauthorized-domain"){
+    return'<b style="color:#ff9b9b">This domain is not allowed yet.</b><br>Add <span style="color:rgba(255,255,255,0.75)">'+esc(host)+'</span> in Firebase Console &rarr; Authentication &rarr; Settings &rarr; Authorized domains, then reload.';
+  }
+  if(code==="auth/popup-blocked"||code==="auth/web-storage-unsupported"){
+    return'Popup was blocked by your browser.<br><button onclick="signInRedirect()" style="margin-top:10px;background:rgba(251,191,36,0.15);border:1px solid rgba(251,191,36,0.35);border-radius:9px;padding:10px 18px;color:#fbbf24;font-size:12px;font-weight:700">Sign in without popup →</button><div style="margin-top:10px;color:rgba(255,255,255,0.35);font-size:10px">Or allow popups for this site in your browser settings.</div>';
+  }
+  return esc((err&&err.message)||"Sign-in failed.")+'<div style="margin-top:6px;color:rgba(255,255,255,0.3);font-size:9px">'+esc(code)+'</div>';
+}
+// Complete any redirect-based sign-in, and surface why it failed
+auth.getRedirectResult().catch(function(e){
+  console.log("redirect:",e.code,e.message);
+  setTimeout(function(){showAuthErr(authErrText(e))},300);
+});
 
 function showAuthErr(msg){
   var el=document.getElementById('auth-err');
@@ -491,7 +583,10 @@ function resetLoginBtn(){
 }
 
 window.signInRedirect=function(){
-  auth.signInWithRedirect(new firebase.auth.GoogleAuthProvider());
+  if(isLocalFile()){showAuthErr(authErrText({code:"auth/operation-not-supported-in-this-environment"}));return}
+  auth.signInWithRedirect(new firebase.auth.GoogleAuthProvider()).catch(function(e){
+    showAuthErr(authErrText(e));
+  });
 };
 
 window.signIn=function(){
@@ -500,6 +595,7 @@ window.signIn=function(){
     if(w)w.scrollIntoView({behavior:'smooth'});
     return;
   }
+  if(isLocalFile()){showAuthErr(authErrText({code:"auth/operation-not-supported-in-this-environment"}));return}
   var btn=document.querySelector('.login-btn');
   if(btn)btn.innerHTML='<div class="spinner" style="width:18px;height:18px;border-width:2px"></div> Signing in...';
   // Called directly inside the click handler so the browser keeps the user-gesture
@@ -507,10 +603,8 @@ window.signIn=function(){
     resetLoginBtn();
     if(err.code==='auth/popup-closed-by-user'||err.code==='auth/cancelled-popup-request'){
       showAuthErr('');
-    } else if(err.code==='auth/popup-blocked'||err.code==='auth/operation-not-supported-in-this-environment'||err.code==='auth/web-storage-unsupported'){
-      showAuthErr('Popup was blocked by your browser.<br><button onclick="signInRedirect()" style="margin-top:10px;background:rgba(251,191,36,0.15);border:1px solid rgba(251,191,36,0.35);border-radius:9px;padding:10px 18px;color:#fbbf24;font-size:12px;font-weight:700">Sign in without popup →</button><div style="margin-top:10px;color:rgba(255,255,255,0.35);font-size:10px">Or allow popups for this site in your browser settings.</div>');
     } else {
-      showAuthErr(err.message);
+      showAuthErr(authErrText(err));
     }
   });
 };
@@ -861,6 +955,8 @@ function render(){
 
   h+='<div class="actions fade-up d1"><button class="action-btn '+(state.view==="dashboard"?"active":"")+'" onclick="switchView(\'dashboard\')">📊 Dashboard</button><button class="action-btn '+(state.view==="edit"?"active":"")+'" onclick="switchView(\'edit\')">✏️ Edit</button><button class="action-btn" onclick="copyPrev()">📋 Copy Prev</button></div>';
   h+='<div class="export-row fade-up d1"><button class="export-btn" onclick="exportCSV()">📥 CSV</button><button class="export-btn" onclick="exportPDF()">📄 PDF</button></div>';
+  h+='<div class="export-row fade-up d1"><button class="export-btn" onclick="backupJSON()">💾 Backup all data</button><button class="export-btn" onclick="restoreJSON()">♻️ Restore</button><input type="file" id="restore-file" accept="application/json,.json" style="display:none" onchange="handleRestoreFile(event)"></div>';
+  h+='<div class="backup-hint fade-up d1">'+lastBackupLabel()+'</div>';
 
   if(state.view==="edit"){
     h+=rSec("income","Income","💰",COLORS.income,100,ti,md.income);
