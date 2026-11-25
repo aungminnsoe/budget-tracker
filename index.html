@@ -355,8 +355,9 @@ function currentAsOf(){
   return opts.length?opts[opts.length-1]:mkey(state.year,state.month);
 }
 // Total contributed to a savings label, counting months up to and including asOf
+function nzHist(h){var o={};Object.keys(h||{}).forEach(function(k){if((h[k]||0)!==0)o[k]=h[k]});return o}
 function fixValAsOf(r,asOf){
-  var snap=histAsOf(r.valHist,asOf);
+  var snap=histAsOf(nzHist(r.valHist),asOf);
   if(snap)return{val:snap.val,note:(snap.key===asOf?'':'value as of '+keyLabel(snap.key)),estimated:false};
   return{val:(r.cost||0),note:'shown at cost \u2014 no valuation by '+keyLabel(asOf),estimated:true};
 }
@@ -894,7 +895,7 @@ window.saveFixRow=function(id){
   list=list.map(function(r){
     if(r.id!==id)return r;
     var hist=clone(r.valHist||{});
-    hist[asOf]=val;
+    if(val>0){hist[asOf]=val}else{delete hist[asOf]}
     return {id:id,name:name||r.name,cost:cost,val:val,valHist:hist};
   });
   state.fixEditing=null;saveFixed(list);
@@ -1041,20 +1042,29 @@ function render(){
 function recF(id,label,val){
   return'<div class="rec-f"><label>'+label+'</label><input id="'+id+'" type="text" inputmode="decimal" value="'+(typeof val==="number"?val:"")+'" placeholder="0.00"></div>';
 }
+function prevReconClose(){
+  var pm=state.month===0?11:state.month-1,py=state.month===0?state.year-1:state.year;
+  var m=state.data[mkey(py,pm)];
+  if(m&&m.recon&&typeof m.recon.close==="number")return{val:m.recon.close,label:MONTHS[pm]+" "+py};
+  return null;
+}
 function reconCard(md,ti,tn,tw,ts){
   var rc=md.recon||{};
   var moneyIn=(typeof rc.inAmt==="number")?rc.inAmt:ti;
   var savingsOut=rc.savingsOut!==false;
   var planned=tn+tw+(savingsOut?ts:0);
-  var ready=(typeof rc.open==="number"&&typeof rc.close==="number");
+  var carry=(typeof rc.open==="number")?null:prevReconClose();
+  var openVal=(typeof rc.open==="number")?rc.open:(carry?carry.val:null);
+  var ready=(typeof openVal==="number"&&typeof rc.close==="number");
   var h='<div class="dash-card fade-up d4" style="border-color:rgba(52,211,153,0.18)">';
   h+='<div class="dash-title" style="color:var(--savings)">\u2696\ufe0f Reconcile '+MONTHS[state.month]+' '+state.year+'</div>';
   h+='<div style="font-size:10px;color:var(--text3);line-height:1.6;margin-bottom:10px">Balances beat memory. At month end, type what the account started and ended with \u2014 the gap finds itself.</div>';
-  h+='<div class="rec-grid">'+recF("rec-open","Opening",rc.open)+recF("rec-in","Money in",moneyIn)+recF("rec-close","Closing",rc.close)+'</div>';
+  h+='<div class="rec-grid">'+recF("rec-open","Opening",openVal)+recF("rec-in","Money in",moneyIn)+recF("rec-close","Closing",rc.close)+'</div>';
+  if(carry)h+='<div style="font-size:9px;color:var(--text4);margin:-4px 0 8px">Opening carried from '+esc(carry.label)+' closing. Change it if your bank says otherwise.</div>';
   h+='<label class="rec-chk"><input type="checkbox" id="rec-sv"'+(savingsOut?" checked":"")+'> Savings transfers leave this account</label>';
   h+='<button class="rec-save" onclick="saveRecon()">Save reconciliation</button>';
   if(ready){
-    var actual=rc.open+moneyIn-rc.close;
+    var actual=openVal+moneyIn-rc.close;
     var gap=actual-planned;
     var gc=Math.abs(gap)<1?"var(--savings)":(gap>0?"var(--danger)":"var(--income)");
     h+='<div class="mini-grid"><div class="mini-box"><div class="v" style="color:var(--needs)">'+cur(actual)+'</div><div class="l">Actually left</div></div>'+
