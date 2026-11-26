@@ -176,6 +176,64 @@ input[type=number]{-moz-appearance:textfield}
 @media(min-width:768px){
   html{font-size:15px}
 }
+
+/* larger type on laptops and desktops */
+@media (min-width:900px){
+#app{max-width:1080px;margin:0 auto}
+html{font-size:18.9px}
+.quote-text{font-size:14.85px}
+.login-sub{font-size:16.2px}
+.login-btn{font-size:18.9px}
+.login-loading{font-size:16.2px}
+.user-name{font-size:14.85px}
+.sync-status{font-size:12.15px}
+.logout-btn{font-size:12.15px}
+.header-label{font-size:12.15px}
+.overview-label{font-size:10.8px}
+.overview-remaining{font-size:21.6px}
+.ring-pct{font-size:13.5px}
+.ring-label{font-size:10.8px}
+.ring-amount{font-size:12.15px}
+.action-btn{font-size:13.5px}
+.export-btn{font-size:13.5px}
+.backup-hint{font-size:12.15px}
+.section-icon{font-size:18.9px}
+.section-title{font-size:16.2px}
+.section-sub{font-size:10.8px}
+.section-amount{font-size:18.9px}
+.section-left{font-size:10.8px}
+.item-label{font-size:14.85px}
+.item-expr{font-size:11.48px}
+.item-amount{font-size:14.85px}
+.edit-input{font-size:14.85px}
+.edit-save{font-size:13.5px}
+.add-btn{font-size:13.5px}
+.dash-title{font-size:14.85px}
+.dash-row-label{font-size:13.5px}
+.dash-row-val{font-size:13.5px}
+.bar-label span{font-size:12.15px}
+.empty-msg{font-size:13.5px}
+.reset-btn{font-size:13.5px}
+.updated-by{font-size:10.8px}
+.big-label{font-size:10.8px}
+.big-sub{font-size:12.15px}
+.sel-row label{font-size:13.5px}
+.msel{font-size:14.85px}
+.mini-box .v{font-size:17.55px}
+.rec-f label{font-size:12.15px}
+.rec-f input{font-size:16.2px}
+.rec-chk{font-size:12.83px}
+.rec-save{font-size:14.85px}
+.rec-msg{font-size:13.5px}
+.mini-box .l{font-size:10.8px}
+.inv-head{font-size:10.8px}
+.inv-row{font-size:14.85px}
+.inv-sub{font-size:10.8px}
+.inv-total{font-size:16.2px}
+.sign-btn{font-size:18.9px}
+.inv-edit input{font-size:14.85px}
+.tab{font-size:10.8px}
+}
 </style>
 </head>
 <body>
@@ -1119,6 +1177,12 @@ function reconCard(md,ti,tn,tw,ts){
   h+='<div style="font-size:10px;color:var(--text3);line-height:1.6;margin-bottom:10px">Balances beat memory. At month end, type what the account started and ended with \u2014 the gap finds itself.</div>';
   h+='<div class="rec-grid">'+recF("rec-open","Opening",openVal)+recF("rec-in","Money in",moneyIn)+recF("rec-close","Closing",rc.close)+'</div>';
   if(carry)h+='<div style="font-size:9px;color:var(--text4);margin:-4px 0 8px">Opening carried from '+esc(carry.label)+' closing. Change it if your bank says otherwise.</div>';
+  if(Math.round(moneyIn*100)!==Math.round(ti*100))h+='<div style="font-size:9px;color:var(--text4);margin:-4px 0 8px">Money in differs from this month\'s income. <button onclick="syncMoneyIn()" style="background:none;border:none;color:var(--income);font-size:9px;text-decoration:underline;padding:0">Use '+cur(ti)+'</button></div>';
+  var dbl=0;
+  (md.income||[]).forEach(function(i){if(/carr(y|ied)\s*forwa|brought\s*forwa|^b\/f|last month/i.test(i.label||""))dbl+=(i.amount||0)});
+  if(dbl>0&&typeof openVal==="number"&&openVal>0){
+    h+='<div style="font-size:9.5px;line-height:1.6;margin-bottom:8px;padding:8px 10px;border-radius:8px;background:rgba(255,107,107,0.08);border:1px solid rgba(255,107,107,0.25);color:#ff9b9b">\u26a0\ufe0f Counted twice: '+cur(dbl)+' sits in an income row <b>and</b> in Opening. Delete that income row, or set Opening to 0 \u2014 not both. Until then the gap is wrong by '+cur(dbl)+'.</div>';
+  }
   h+='<label class="rec-chk"><input type="checkbox" id="rec-sv"'+(savingsOut?" checked":"")+'> Savings transfers leave this account</label>';
   h+='<button class="rec-save" onclick="saveRecon()">Save reconciliation</button>';
   if(ready){
@@ -1180,6 +1244,13 @@ window.saveEdit=function(sec,id){
 window.deleteItem=function(s,id){var md=getMonth();md[s]=md[s].filter(function(i){return i.id!==id});save(md)};
 window.addItem=function(s){var md=getMonth(),nid=uid();md[s].push({id:nid,label:"New Item",amount:0});state.editing={section:s,id:nid};save(md)};
 window.copyPrev=function(){var pm=state.month===0?11:state.month-1,py=state.month===0?state.year-1:state.year,prev=state.data[mkey(py,pm)];if(prev){var c=clone(prev);delete c.recon;c.wants=c.wants.map(function(i){return{id:i.id,label:i.label,amount:0}});save(c)}else alert("No data for previous month")};
+window.syncMoneyIn=function(){
+  var md=clone(getMonth());
+  var ti=0;(md.income||[]).forEach(function(i){ti+=(i.amount||0)});
+  md.recon=md.recon||{};
+  md.recon.inAmt=Math.round(ti*100)/100;
+  save(md);
+};
 window.addUntracked=function(amt){
   amt=Math.round(amt*100)/100;
   if(!confirm("Add "+cur(amt)+" as \u201cUntracked spending\u201d under Needs for "+MONTHS[state.month]+" "+state.year+"?\n\nThis closes the gap by recording what you actually spent."))return;
